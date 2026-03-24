@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScraperAPI — Полный гайд для Price Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07090e;--bg2:#0b0f1a;--surf:#111927;--surf2:#182236;--surf3:#1e2d45;
+  --b:#1e2d44;--b2:#253652;
+  --a:#3b82f6;--a2:#60a5fa;
+  --g:#10b981;--g2:#34d399;
+  --y:#f59e0b;--r:#f43f5e;--p:#8b5cf6;--o:#f97316;
+  --t:#e2e8f0;--t2:#94a3b8;--t3:#4b6282;
+  --mono:'JetBrains Mono',monospace;
+  --head:'Unbounded',sans-serif;
+  --body:'Golos Text',sans-serif;
+}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{font-family:var(--body);background:var(--bg);color:var(--t);line-height:1.75;overflow-x:hidden}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--b2);border-radius:3px}
+
+/* ── SIDEBAR ── */
+.wrap{display:grid;grid-template-columns:270px 1fr;min-height:100vh}
+.sb{background:var(--bg2);border-right:1px solid var(--b);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
+.sb-head{padding:22px 20px 14px;border-bottom:1px solid var(--b)}
+.sb-icon{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,var(--a),var(--p));display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:10px;box-shadow:0 0 18px rgba(59,130,246,.3)}
+.sb-head h1{font-family:var(--head);font-size:11px;font-weight:700;line-height:1.4}
+.sb-head p{font-size:10px;color:var(--t3);margin-top:2px}
+.sb-prog{padding:10px 20px;border-bottom:1px solid var(--b)}
+.prog-bar{height:3px;background:var(--surf2);border-radius:2px;overflow:hidden;margin:6px 0}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--g),var(--a));border-radius:2px;transition:width .5s;width:0%}
+.prog-txt{font-size:10px;color:var(--g);font-family:var(--mono)}
+.sb-nav{padding:6px 0;flex:1}
+.nb{font-size:8px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:1.5px;padding:10px 20px 4px}
+.nl{display:flex;align-items:center;gap:8px;padding:7px 20px;font-size:12px;color:var(--t2);text-decoration:none;border-left:3px solid transparent;transition:all .15s;cursor:pointer}
+.nl:hover{background:var(--surf);color:var(--t);border-left-color:var(--b2)}
+.nl.act{background:rgba(59,130,246,.08);color:var(--a);border-left-color:var(--a)}
+.nl.done{color:var(--g)}
+.nl.done .ni{background:var(--g);color:#000}
+.ni{width:20px;height:20px;border-radius:5px;background:var(--surf2);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-family:var(--mono);transition:all .2s}
+.nl.act .ni{background:var(--a);color:#000}
+.nc{margin-left:auto;font-size:11px;opacity:0;transition:opacity .2s}
+.nl.done .nc{opacity:1}
+
+/* ── MAIN ── */
+.main{min-width:0}
+.hero{padding:56px 56px 44px;background:linear-gradient(135deg,var(--bg),#0d1628,var(--bg));border-bottom:1px solid var(--b);position:relative;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-60px;right:-60px;width:380px;height:380px;background:radial-gradient(circle,rgba(59,130,246,.07) 0%,transparent 70%)}
+.ey{display:inline-flex;align-items:center;gap:7px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:20px;padding:5px 14px;font-size:11px;color:var(--g);font-weight:700;margin-bottom:18px}
+.hero h1{font-family:var(--head);font-size:34px;font-weight:900;letter-spacing:-1px;line-height:1.1;margin-bottom:14px}
+.hero h1 em{font-style:normal;background:linear-gradient(135deg,var(--a),var(--p));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero p{font-size:14px;color:var(--t2);max-width:600px;line-height:1.8;margin-bottom:24px}
+.hero-chips{display:flex;gap:8px;flex-wrap:wrap}
+.ch{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;border:1px solid}
+.ch-b{background:rgba(59,130,246,.1);border-color:rgba(59,130,246,.3);color:var(--a2)}
+.ch-g{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:var(--g2)}
+.ch-r{background:rgba(244,63,94,.1);border-color:rgba(244,63,94,.25);color:#fb7185}
+.ch-y{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.25);color:var(--y)}
+
+/* ── SECTIONS ── */
+.sec{padding:44px 56px;border-bottom:1px solid var(--b);opacity:0;transform:translateY(16px);transition:opacity .45s,transform .45s}
+.sec.vis{opacity:1;transform:none}
+.sl{display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:700;color:var(--a);background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2);border-radius:20px;padding:3px 11px;letter-spacing:.8px;text-transform:uppercase;margin-bottom:10px}
+.st{font-family:var(--head);font-size:22px;font-weight:700;letter-spacing:-.5px;line-height:1.2}
+.ss{font-size:13px;color:var(--t2);margin-top:6px;line-height:1.7}
+
+/* ── STEPS ── */
+.steps{display:flex;flex-direction:column;gap:12px;margin:20px 0}
+.step{display:flex;gap:14px;background:var(--surf);border:1px solid var(--b);border-radius:13px;padding:16px 18px;position:relative;transition:border-color .2s}
+.step:hover{border-color:var(--b2)}
+.step::before{content:'';position:absolute;left:0;top:0;width:3px;height:100%;background:linear-gradient(180deg,var(--a),var(--p));border-radius:3px 0 0 3px;opacity:0;transition:opacity .2s}
+.step:hover::before{opacity:1}
+.sn{width:30px;height:30px;border-radius:7px;background:var(--surf2);border:1px solid var(--b2);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700;color:var(--a);flex-shrink:0}
+.sb2 h4{font-size:14px;font-weight:700;margin-bottom:4px}
+.sb2 p{font-size:13px;color:var(--t2);line-height:1.7}
+.sb2 code{font-family:var(--mono);font-size:11px;color:#06b6d4;background:rgba(6,182,212,.08);padding:1px 6px;border-radius:4px}
+
+/* ── TERMINAL ── */
+.term{border-radius:12px;overflow:hidden;border:1px solid var(--b2);margin:14px 0;box-shadow:0 14px 40px rgba(0,0,0,.5)}
+.tbar{background:#161e2e;padding:10px 14px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--b)}
+.td{width:11px;height:11px;border-radius:50%}
+.tdr{background:#ff5f57}.tdy{background:#febc2e}.tdg{background:#28c840}
+.ttl{margin-left:8px;font-size:10px;color:var(--t3);font-family:var(--mono);flex:1;text-align:center}
+.cbtn{background:var(--surf3);border:1px solid var(--b2);color:var(--t2);padding:3px 10px;border-radius:5px;font-size:10px;cursor:pointer;font-family:var(--body);font-weight:700;transition:all .2s;margin-left:auto}
+.cbtn:hover{background:var(--a);color:#fff;border-color:var(--a)}
+.cbtn.ok{background:var(--g);color:#fff;border-color:var(--g)}
+.tbody{background:#040810;padding:18px 22px;font-family:var(--mono);font-size:12px;line-height:2;overflow-x:auto}
+.pr{color:var(--g2);user-select:none}.cm{color:var(--t)}.co{color:var(--t3);font-style:italic}
+.ok2{color:var(--g)}.wa{color:var(--y)}.er{color:var(--r)}
+.hl{background:rgba(59,130,246,.08);border-left:3px solid var(--a);margin:0 -22px;padding:0 22px 0 19px;display:block}
+.hlg{background:rgba(16,185,129,.07);border-left:3px solid var(--g);margin:0 -22px;padding:0 22px 0 19px;display:block}
+
+/* ── INFO BOXES ── */
+.info{display:flex;gap:12px;align-items:flex-start;border-radius:12px;padding:14px 18px;margin:14px 0;border:1px solid}
+.ii{font-size:18px;flex-shrink:0;margin-top:1px}
+.ib{flex:1}
+.it{font-size:12px;font-weight:700;margin-bottom:3px}
+.ix{font-size:13px;line-height:1.7}
+.tip{background:rgba(59,130,246,.06);border-color:rgba(59,130,246,.2)}.tip .it{color:var(--a)}
+.ok3{background:rgba(16,185,129,.06);border-color:rgba(16,185,129,.2)}.ok3 .it{color:var(--g)}
+.warn{background:rgba(245,158,11,.06);border-color:rgba(245,158,11,.2)}.warn .it{color:var(--y)}
+.err2{background:rgba(244,63,94,.06);border-color:rgba(244,63,94,.2)}.err2 .it{color:var(--r)}
+
+/* ── TABLES ── */
+.tw{border-radius:12px;overflow:hidden;border:1px solid var(--b);margin:14px 0}
+table{width:100%;border-collapse:collapse}
+thead th{background:var(--surf2);padding:10px 16px;text-align:left;font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.8px;border-bottom:1px solid var(--b)}
+tbody td{padding:11px 16px;font-size:13px;border-bottom:1px solid var(--b);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--surf)}
+.mo{font-family:var(--mono);font-size:11px;color:#06b6d4}
+.grn{color:var(--g);font-weight:600}.yel{color:var(--y);font-weight:600}.red{color:var(--r);font-weight:600}
+
+/* ── PRICING CARDS ── */
+.pcards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:18px 0}
+.pcard{background:var(--surf);border:1px solid var(--b);border-radius:14px;padding:20px;position:relative;overflow:hidden;transition:border-color .2s}
+.pcard:hover{border-color:var(--b2)}
+.pcard.rec{border-color:rgba(59,130,246,.4)}
+.pcard.rec::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--a),var(--p))}
+.pbadge{position:absolute;top:12px;right:12px;background:linear-gradient(135deg,var(--a),var(--p));color:#fff;font-size:9px;font-weight:800;padding:3px 8px;border-radius:8px;letter-spacing:.5px}
+.pname{font-family:var(--head);font-size:14px;font-weight:700;margin-bottom:6px}
+.pprice{font-size:26px;font-weight:800;font-family:var(--mono);color:var(--a);margin-bottom:4px}
+.pprice span{font-size:13px;color:var(--t2)}
+.preqs{font-size:11px;color:var(--t2);line-height:2;margin-top:10px}
+
+/* ── DONE BTN ── */
+.dbtn{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(135deg,var(--g),#059669);color:#fff;border:none;padding:12px 24px;border-radius:11px;font-family:var(--body);font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;box-shadow:0 4px 16px rgba(16,185,129,.25);margin-top:28px}
+.dbtn:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(16,185,129,.35)}
+.dbtn.done2{background:var(--surf2);color:var(--g);box-shadow:none;cursor:default;transform:none}
+
+/* ── ACCORDION ── */
+.acc{display:flex;flex-direction:column;gap:10px;margin:16px 0}
+.ai{border-radius:12px;overflow:hidden;border:1px solid var(--b)}
+.ah{background:var(--surf);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;transition:background .15s}
+.ah:hover{background:var(--surf2)}
+.ahl{display:flex;align-items:center;gap:10px}
+.ae{font-family:var(--mono);font-size:11px;color:var(--r);font-weight:600}
+.at{font-size:13px;color:var(--t2)}
+.aa{color:var(--t3);font-size:10px;transition:transform .2s}
+.ai.open .aa{transform:rotate(180deg)}
+.ab{display:none;background:var(--bg2);padding:18px;border-top:1px solid var(--b)}
+.ai.open .ab{display:block}
+.ab p{font-size:13px;color:var(--t2);line-height:1.75;margin-bottom:10px}
+.ab p:last-child{margin-bottom:0}
+.ab code{font-family:var(--mono);font-size:11px;color:#06b6d4;background:rgba(6,182,212,.08);padding:1px 6px;border-radius:4px}
+
+/* ── MOCK API DIAGRAM ── */
+.flow-diag{display:flex;flex-direction:column;gap:0;margin:20px 0;max-width:550px}
+.fn{background:var(--surf);border:1px solid var(--b2);border-radius:11px;padding:12px 18px;display:flex;align-items:center;gap:12px}
+.fi{font-size:22px;flex-shrink:0}
+.fl{font-size:13px;font-weight:600}
+.fs{font-size:11px;color:var(--t3)}
+.fa{align-self:stretch;display:flex;justify-content:flex-start;padding:2px 0 2px 30px;color:var(--t3);font-size:16px;line-height:1.2}
+.fa code{font-size:10px;color:var(--a);font-family:var(--mono);background:rgba(59,130,246,.08);padding:1px 6px;border-radius:4px;margin-left:4px}
+
+/* ── CODE COMPARE ── */
+.compare{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0}
+.comp-card{border-radius:12px;overflow:hidden;border:1px solid}
+.comp-head{padding:10px 16px;font-size:11px;font-weight:700;border-bottom:1px solid var(--b)}
+.comp-bad{border-color:rgba(244,63,94,.3)}.comp-bad .comp-head{background:rgba(244,63,94,.08);color:var(--r)}
+.comp-good{border-color:rgba(16,185,129,.3)}.comp-good .comp-head{background:rgba(16,185,129,.08);color:var(--g)}
+.comp-body{background:#040810;padding:16px;font-family:var(--mono);font-size:12px;line-height:2}
+
+/* ── RESPONSIVE ── */
+@media(max-width:900px){
+  .wrap{grid-template-columns:1fr}.sb{display:none}
+  .sec,.hero{padding:36px 20px}
+  .pcards,.compare{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ═══ SIDEBAR ═══ -->
+<nav class="sb">
+  <div class="sb-head">
+    <div class="sb-icon">🕷️</div>
+    <h1>ScraperAPI — Гайд</h1>
+    <p>Решение проблемы блокировок</p>
+  </div>
+  <div class="sb-prog">
+    <div style="font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;font-weight:700">Прогресс настройки</div>
+    <div class="prog-bar"><div class="prog-fill" id="pf"></div></div>
+    <div class="prog-txt" id="pt">0 / 7 шагов</div>
+  </div>
+  <div class="sb-nav">
+    <div class="nb">Понимание</div>
+    <a class="nl act" href="#why"><span class="ni">!</span>Почему блокируют<span class="nc">✓</span></a>
+    <a class="nl" href="#how"><span class="ni">1</span>Как работает ScraperAPI<span class="nc">✓</span></a>
+    <div class="nb">Настройка</div>
+    <a class="nl" href="#register"><span class="ni">2</span>Регистрация и ключ<span class="nc">✓</span></a>
+    <a class="nl" href="#pricing"><span class="ni">3</span>Тарифы и расчёт<span class="nc">✓</span></a>
+    <a class="nl" href="#secrets"><span class="ni">4</span>Добавить в GitHub<span class="nc">✓</span></a>
+    <div class="nb">Код</div>
+    <a class="nl" href="#code-explain"><span class="ni">5</span>Что делает код<span class="nc">✓</span></a>
+    <a class="nl" href="#first-run"><span class="ni">6</span>Первый запуск<span class="nc">✓</span></a>
+    <div class="nb">Помощь</div>
+    <a class="nl" href="#errors"><span class="ni">?</span>Ошибки и решения<span class="nc">✓</span></a>
+    <a class="nl" href="#limits"><span class="ni">!</span>Лимиты и советы<span class="nc">✓</span></a>
+  </div>
+</nav>
+
+<!-- ═══ MAIN ═══ -->
+<main class="main">
+
+<!-- HERO -->
+<div class="hero" id="why">
+  <div class="ey">🔴 Проблема решена — новый подход</div>
+  <h1>Парсинг без блокировок<br>через <em>ScraperAPI</em></h1>
+  <p>Прямые запросы на Ozon и ЯМ блокируются их антибот-защитой. ScraperAPI — специализированный сервис который берёт на себя всю работу по обходу защиты. Твой код просто делает один HTTP-запрос — остальное за него.</p>
+  <div class="hero-chips">
+    <span class="ch ch-r">❌ Прямые запросы → 403</span>
+    <span class="ch ch-g">✅ ScraperAPI → 200 OK</span>
+    <span class="ch ch-b">🤖 Автокапча</span>
+    <span class="ch ch-b">🌍 Российские IP</span>
+    <span class="ch ch-y">💰 От $0/мес</span>
+  </div>
+
+  <div class="info warn" style="margin-top:28px;max-width:640px">
+    <div class="ii">⚠️</div>
+    <div class="ib">
+      <div class="it">Почему прямой парсинг перестал работать</div>
+      <div class="ix">Ozon и Яндекс.Маркет используют профессиональную антибот-защиту: они видят что запросы идут с IP-адресов серверов GitHub (известный диапазон), блокируют их, показывают капчу или возвращают пустую страницу. Никакой прокси-список это не решит — нужен специализированный инструмент.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ КАК РАБОТАЕТ ══ -->
+<section class="sec" id="how">
+  <div class="sl">Принцип работы</div>
+  <div class="st">Как именно работает ScraperAPI</div>
+  <div class="ss">Вместо прямого запроса — одна строка кода меняется. Всё остальное скраперapi делает сам.</div>
+
+  <div class="compare" style="margin-top:24px">
+    <div class="comp-card comp-bad">
+      <div class="comp-head">❌ КАК БЫЛО (блокируется)</div>
+      <div class="comp-body">
+        <span style="color:var(--t3)">requests.get(</span><br>
+        &nbsp;&nbsp;<span style="color:var(--g2)">"https://www.ozon.ru/product/..."</span><br>
+        <span style="color:var(--t3)">)</span><br>
+        <br>
+        <span style="color:var(--r)">→ HTTP 403 Forbidden</span><br>
+        <span style="color:var(--r)">→ Капча</span><br>
+        <span style="color:var(--r)">→ Пустая страница</span>
+      </div>
+    </div>
+    <div class="comp-card comp-good">
+      <div class="comp-head">✅ КАК СТАЛО (работает)</div>
+      <div class="comp-body">
+        <span style="color:var(--t3)">requests.get(</span><br>
+        &nbsp;&nbsp;<span style="color:var(--g2)">"http://api.scraperapi.com"</span><span style="color:var(--t3)">,</span><br>
+        &nbsp;&nbsp;<span style="color:var(--t3)">params={</span><span style="color:#79b8ff">"url"</span><span style="color:var(--t3)">:ozon_url, </span><span style="color:#79b8ff">"render"</span><span style="color:var(--t3)">:</span><span style="color:var(--g2)">"true"</span><span style="color:var(--t3)">}</span><br>
+        <span style="color:var(--t3)">)</span><br>
+        <br>
+        <span style="color:var(--g)">→ HTTP 200 OK</span><br>
+        <span style="color:var(--g)">→ Полный HTML страницы</span><br>
+        <span style="color:var(--g)">→ Цена найдена</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-diag">
+    <div class="fn" style="border-color:rgba(245,158,11,.3)">
+      <div class="fi">💻</div><div><div class="fl">GitHub Actions запускает скрипт</div><div class="fs">Python делает запрос к api.scraperapi.com</div></div>
+    </div>
+    <div class="fa">↓ <code>HTTP запрос с URL и API-ключом</code></div>
+    <div class="fn" style="border-color:rgba(139,92,246,.3)">
+      <div class="fi">🕷️</div><div><div class="fl">ScraperAPI получает запрос</div><div class="fs">Выбирает резидентный российский IP, запускает Chrome</div></div>
+    </div>
+    <div class="fa">↓ <code>Реальный браузер с RU-IP открывает Ozon/ЯМ</code></div>
+    <div class="fn" style="border-color:rgba(59,130,246,.3)">
+      <div class="fi">🌐</div><div><div class="fl">Ozon/ЯМ видит обычного пользователя</div><div class="fs">Возвращает нормальную страницу. Никакой блокировки.</div></div>
+    </div>
+    <div class="fa">↓ <code>Готовый HTML передаётся обратно</code></div>
+    <div class="fn" style="border-color:rgba(16,185,129,.3)">
+      <div class="fi">✅</div><div><div class="fl">Python получает HTML и извлекает цену</div><div class="fs">Парсер находит цену, сохраняет в БД, отправляет в Telegram</div></div>
+    </div>
+  </div>
+
+  <div class="info tip">
+    <div class="ii">💡</div>
+    <div class="ib">
+      <div class="it">ScraperAPI делает за тебя:</div>
+      <div class="ix">
+        ✅ Ротацию резидентных IP (Россия) при каждом запросе<br>
+        ✅ Рендеринг JavaScript — как настоящий браузер Chrome<br>
+        ✅ Автоматическое решение капч (включая Яндекс SmartCaptcha)<br>
+        ✅ Retry при временных ошибках<br>
+        ✅ Правильные заголовки браузера (User-Agent, fingerprint)<br>
+        ✅ Геолокацию — страница открывается «из России»
+      </div>
+    </div>
+  </div>
+
+  <button class="dbtn" onclick="done(this,'how')">✓ Понял принцип</button>
+</section>
+
+<!-- ══ РЕГИСТРАЦИЯ ══ -->
+<section class="sec" id="register">
+  <div class="sl">Шаг 1</div>
+  <div class="st">Регистрация и получение API-ключа</div>
+  <div class="ss">Занимает 5 минут. Кредитная карта для бесплатного плана не нужна.</div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="sn">1</div>
+      <div class="sb2">
+        <h4>Откройте сайт ScraperAPI</h4>
+        <p>Перейдите на <code>scraperapi.com</code> в браузере. Нажмите кнопку <strong>«Get Started For Free»</strong> или <strong>«Sign Up»</strong> в правом верхнем углу.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">2</div>
+      <div class="sb2">
+        <h4>Создайте аккаунт</h4>
+        <p>Заполните форму регистрации:<br>
+        • <strong>Email</strong> — любой рабочий email<br>
+        • <strong>Password</strong> — придумайте пароль минимум 8 символов<br>
+        • Нажмите <strong>«Create Account»</strong><br><br>
+        Подтверждение email не всегда требуется — иногда сразу попадёте в дашборд.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">3</div>
+      <div class="sb2">
+        <h4>Найдите ваш API-ключ</h4>
+        <p>После входа вы попадёте в <strong>Dashboard (Дашборд)</strong>. Прямо на главной странице дашборда будет блок с вашим API-ключом вида:<br><br>
+        <code>API Key: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6</code><br><br>
+        Это строка из 32 символов (буквы и цифры). Нажмите кнопку копирования рядом с ключом.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">4</div>
+      <div class="sb2">
+        <h4>Проверьте бесплатный баланс</h4>
+        <p>На бесплатном плане вы получаете <strong>1000 запросов в месяц</strong>. В дашборде вы увидите: <code>0 / 1000 requests used</code>. Этого хватит для тестирования. Для реальной работы нужен платный план.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">5</div>
+      <div class="sb2">
+        <h4>Сохраните API-ключ в надёжном месте</h4>
+        <p>Скопируйте ключ и сохраните — он понадобится на следующем шаге при настройке GitHub Secrets. Ключ всегда можно посмотреть в дашборде ScraperAPI.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="info ok3">
+    <div class="ii">✅</div>
+    <div class="ib">
+      <div class="it">Что вы получаете бесплатно</div>
+      <div class="ix">1000 запросов/месяц, базовые прокси (Datacenter), без JS-рендеринга в бесплатном плане. <strong>Важно:</strong> для Ozon и ЯМ нужен JS-рендеринг — он доступен только на платных планах. Бесплатный план подходит только для тестирования подключения.</div>
+    </div>
+  </div>
+
+  <button class="dbtn" onclick="done(this,'register')">✓ Зарегистрирован, ключ получен</button>
+</section>
+
+<!-- ══ ТАРИФЫ ══ -->
+<section class="sec" id="pricing">
+  <div class="sl">Шаг 2</div>
+  <div class="st">Тарифы ScraperAPI — что выбрать</div>
+  <div class="ss">Честный расчёт сколько нужно запросов для вашего мониторинга</div>
+
+  <div class="pcards">
+    <div class="pcard">
+      <div class="pname">Free</div>
+      <div class="pprice">$0<span>/мес</span></div>
+      <div class="preqs">
+        ✅ 1 000 запросов/мес<br>
+        ✅ Базовые прокси<br>
+        ❌ JS-рендеринг — нет<br>
+        ❌ Premium прокси — нет<br>
+        ❌ Для Ozon/ЯМ не подойдёт<br>
+        ✅ Только для тестирования
+      </div>
+    </div>
+    <div class="pcard rec">
+      <div class="pbadge">РЕКОМЕНДУЕМ</div>
+      <div class="pname">Hobby</div>
+      <div class="pprice">$49<span>/мес</span></div>
+      <div class="preqs">
+        ✅ 250 000 запросов/мес<br>
+        ✅ JS-рендеринг (render=true)<br>
+        ✅ Ротация прокси<br>
+        ✅ Геотаргетинг (RU)<br>
+        ⚠️ Premium прокси +доп. плата<br>
+        ✅ 52x запаса для нашего проекта
+      </div>
+    </div>
+    <div class="pcard">
+      <div class="pname">Business</div>
+      <div class="pprice">$149<span>/мес</span></div>
+      <div class="preqs">
+        ✅ 3 000 000 запросов/мес<br>
+        ✅ Всё из Hobby<br>
+        ✅ Premium прокси включены<br>
+        ✅ Приоритетная поддержка<br>
+        ✅ Для больших проектов
+      </div>
+    </div>
+  </div>
+
+  <div class="tw" style="margin-top:24px">
+    <table>
+      <thead><tr><th>Ваш мониторинг</th><th>Расчёт</th><th>Запросов/мес</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>10 товаров на Ozon</td>
+          <td>10 × 8 запусков/день × 30 дней</td>
+          <td class="mo grn">2 400</td>
+        </tr>
+        <tr>
+          <td>10 товаров на ЯМ</td>
+          <td>10 × 8 × 30</td>
+          <td class="mo grn">2 400</td>
+        </tr>
+        <tr>
+          <td>Повторы при ошибках (×2)</td>
+          <td>× 2 в среднем</td>
+          <td class="mo yel">9 600</td>
+        </tr>
+        <tr>
+          <td><strong>Итого (пессимистично)</strong></td>
+          <td>С учётом всех повторов</td>
+          <td class="mo" style="color:var(--a);font-weight:700">~12 000</td>
+        </tr>
+        <tr>
+          <td><strong>Hobby план имеет</strong></td>
+          <td>250 000 запросов</td>
+          <td class="mo grn">250 000 (запас 20x)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="info tip">
+    <div class="ii">💡</div>
+    <div class="ib">
+      <div class="it">Про Premium прокси и Яндекс.Маркет</div>
+      <div class="ix">В нашем коде для ЯМ включён параметр <code>ultra_premium=True</code>. Premium прокси — это реальные IP домашних пользователей, они реже блокируются. Один запрос с premium расходует 10 кредитов вместо 1. Для ЯМ: 10 товаров × 8 × 30 × 10 = 24 000 кредитов. Hobby план (250K) покрывает это с запасом 10x.</div>
+    </div>
+  </div>
+
+  <button class="dbtn" onclick="done(this,'pricing')">✓ Тариф выбран, план оплачен</button>
+</section>
+
+<!-- ══ GITHUB SECRETS ══ -->
+<section class="sec" id="secrets">
+  <div class="sl">Шаг 3</div>
+  <div class="st">Добавить API-ключ в GitHub Secrets</div>
+  <div class="ss">API-ключ хранится в зашифрованном хранилище GitHub — никогда не попадёт в код</div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="sn">1</div>
+      <div class="sb2">
+        <h4>Откройте репозиторий на GitHub</h4>
+        <p>Перейдите на <code>github.com/niksnm/price-monitor</code></p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">2</div>
+      <div class="sb2">
+        <h4>Settings → Secrets → Actions</h4>
+        <p>Нажмите вкладку <strong>Settings</strong> (шестерёнка, правее всего) → в левом меню найдите <strong>«Secrets and variables»</strong> → нажмите <strong>«Actions»</strong></p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">3</div>
+      <div class="sb2">
+        <h4>Нажмите «New repository secret»</h4>
+        <p>Зелёная кнопка в правом верхнем углу страницы Secrets.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">4</div>
+      <div class="sb2">
+        <h4>Добавьте SCRAPER_API_KEY</h4>
+        <p><strong>Name:</strong> <code>SCRAPER_API_KEY</code> (точно так, заглавными)<br>
+        <strong>Secret:</strong> вставьте ваш ключ из дашборда ScraperAPI (32 символа)<br>
+        Нажмите <strong>«Add secret»</strong></p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">5</div>
+      <div class="sb2">
+        <h4>Добавьте SCRAPER_PREMIUM (для ЯМ)</h4>
+        <p><strong>Name:</strong> <code>SCRAPER_PREMIUM</code><br>
+        <strong>Secret:</strong> <code>true</code><br>
+        Нажмите <strong>«Add secret»</strong><br><br>
+        Это включает Premium прокси для Яндекс.Маркет. Если у вас тариф Hobby — это нормально работает (расходует 10 кредитов за запрос к ЯМ).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">6</div>
+      <div class="sb2">
+        <h4>Проверьте что все секреты добавлены</h4>
+        <p>В списке должны быть:<br>
+        <code>SCRAPER_API_KEY</code> ✅<br>
+        <code>SCRAPER_PREMIUM</code> ✅<br>
+        <code>TELEGRAM_BOT_TOKEN</code> ✅<br>
+        <code>TELEGRAM_CHAT_ID</code> ✅</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Имя секрета</th><th>Значение</th><th>Откуда брать</th></tr></thead>
+      <tbody>
+        <tr><td class="mo">SCRAPER_API_KEY</td><td>Ключ из 32 символов</td><td>Дашборд ScraperAPI → главная страница</td></tr>
+        <tr><td class="mo">SCRAPER_PREMIUM</td><td><code style="color:var(--g)">true</code></td><td>Введите вручную — буквально «true»</td></tr>
+        <tr><td class="mo">TELEGRAM_BOT_TOKEN</td><td>7123456789:AAHxxx...</td><td>@BotFather → /newbot</td></tr>
+        <tr><td class="mo">TELEGRAM_CHAT_ID</td><td>123456789</td><td>@userinfobot в Telegram</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <button class="dbtn" onclick="done(this,'secrets')">✓ Все секреты добавлены</button>
+</section>
+
+<!-- ══ КОД ══ -->
+<section class="sec" id="code-explain">
+  <div class="sl">Шаг 4</div>
+  <div class="st">Что делает каждый файл кода</div>
+  <div class="ss">Подробное объяснение каждого модуля — что, зачем и как</div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Файл</th><th>Что делает</th><th>Редактируется?</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="mo">src/scraping_client.py</td>
+          <td><strong>Ядро системы.</strong> Отправляет все запросы через ScraperAPI. Здесь хранится логика: сколько попыток делать, как обрабатывать ошибки, проверка баланса аккаунта.</td>
+          <td class="grn">Нет (работает сам)</td>
+        </tr>
+        <tr>
+          <td class="mo">src/parsers/ozon.py</td>
+          <td><strong>Парсер Ozon.</strong> Получает HTML через scraping_client, затем извлекает цену 4-мя разными методами (JSON-LD, мета-теги, JavaScript-переменные, CSS-атрибуты).</td>
+          <td class="yel">Иногда при обновлениях сайта</td>
+        </tr>
+        <tr>
+          <td class="mo">src/parsers/yandex_market.py</td>
+          <td><strong>Парсер ЯМ.</strong> Аналогично Ozon + дополнительный метод через __NEXT_DATA__ (специфика Next.js). Использует ultra_premium прокси.</td>
+          <td class="yel">Иногда при обновлениях сайта</td>
+        </tr>
+        <tr>
+          <td class="mo">src/parsers/wildberries.py</td>
+          <td><strong>Парсер WB.</strong> Использует официальное API Wildberries — не нуждается в ScraperAPI. Самый надёжный парсер.</td>
+          <td class="grn">Нет (API стабильный)</td>
+        </tr>
+        <tr>
+          <td class="mo">src/monitor.py</td>
+          <td><strong>Главный скрипт.</strong> Запускается GitHub Actions. Координирует все парсеры, сохраняет цены в БД, отправляет Telegram-алерты, генерирует дашборд.</td>
+          <td class="grn">Нет (если не нужна кастомизация)</td>
+        </tr>
+        <tr>
+          <td class="mo">config/products.json</td>
+          <td><strong>Список ваших товаров.</strong> Только этот файл вы редактируете регулярно — добавляете/удаляете ссылки и пороги.</td>
+          <td style="color:var(--a);font-weight:600">Да — регулярно</td>
+        </tr>
+        <tr>
+          <td class="mo">.github/workflows/monitor.yml</td>
+          <td><strong>Расписание GitHub Actions.</strong> Говорит GitHub когда запускать скрипт и какие секреты передавать.</td>
+          <td class="grn">Нет (если не меняется расписание)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p style="font-size:14px;color:var(--t2);margin:20px 0 12px">Ключевой фрагмент кода — как происходит запрос через ScraperAPI:</p>
+
+  <div class="term">
+    <div class="tbar"><div class="td tdr"></div><div class="td tdy"></div><div class="td tdg"></div><span class="ttl">src/scraping_client.py — фрагмент</span><button class="cbtn" onclick="copyT(this)">Копировать</button></div>
+    <div class="tbody">
+<span class="co"># Параметры запроса к ScraperAPI</span>
+params = {
+    <span style="color:#79b8ff">"api_key"</span>: api_key,       <span class="co"># ← ваш ключ из GitHub Secrets</span>
+    <span style="color:#79b8ff">"url"</span>: url,               <span class="co"># ← страница Ozon/ЯМ которую парсим</span>
+    <span style="color:#79b8ff">"render"</span>: <span style="color:var(--g2)">"true"</span>,         <span class="co"># ← запустить браузер, выполнить JS</span>
+    <span style="color:#79b8ff">"country_code"</span>: <span style="color:var(--g2)">"ru"</span>,    <span class="co"># ← использовать российский IP</span>
+    <span style="color:#79b8ff">"premium"</span>: <span style="color:var(--g2)">"true"</span>,       <span class="co"># ← резидентный IP (дороже, надёжнее)</span>
+}
+
+<span class="co"># Один запрос — ScraperAPI делает всё остальное сам</span>
+<span class="hl">response = requests.get(<span style="color:var(--g2)">"http://api.scraperapi.com"</span>, params=params, timeout=70)
+html = response.text  <span class="co"># ← готовый HTML как из браузера</span></span>
+    </div>
+  </div>
+
+  <button class="dbtn" onclick="done(this,'code-explain')">✓ Понял как работает код</button>
+</section>
+
+<!-- ══ ПЕРВЫЙ ЗАПУСК ══ -->
+<section class="sec" id="first-run">
+  <div class="sl">Шаг 5</div>
+  <div class="st">Загрузка файлов и первый запуск</div>
+  <div class="ss">Загружаем обновлённый код на GitHub и проверяем что всё работает</div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="sn">1</div>
+      <div class="sb2">
+        <h4>Распакуй обновлённый архив price-monitor-v3.zip</h4>
+        <p>В архиве уже все обновлённые файлы с поддержкой ScraperAPI. Скопируй содержимое в папку <code>price-monitor_ver2</code> на компьютере.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">2</div>
+      <div class="sb2">
+        <h4>Загрузи на GitHub через Git Bash</h4>
+      </div>
+    </div>
+  </div>
+
+  <div class="term">
+    <div class="tbar"><div class="td tdr"></div><div class="td tdy"></div><div class="td tdg"></div><span class="ttl">Git Bash — загрузка обновлений</span><button class="cbtn" onclick="copyT(this)">Копировать</button></div>
+    <div class="tbody">
+<span class="co"># Переходим в папку проекта</span>
+<span class="pr">$ </span><span class="cm">cd ~/Desktop/Price_Monitor/price-monitor_ver2</span>
+
+<span class="co"># Сначала скачиваем изменения с GitHub (если Actions что-то закоммитил)</span>
+<span class="pr">$ </span><span class="cm">git pull</span>
+
+<span class="co"># Добавляем все новые/изменённые файлы</span>
+<span class="hl"><span class="pr">$ </span><span class="cm">git add .</span></span>
+
+<span class="co"># Коммитим</span>
+<span class="hl"><span class="pr">$ </span><span class="cm">git commit -m "Add ScraperAPI support for Ozon and YandexMarket"</span></span>
+
+<span class="co"># Загружаем на GitHub</span>
+<span class="hl"><span class="pr">$ </span><span class="cm">git push</span></span>
+<span class="ok2">To https://github.com/niksnm/price-monitor.git
+   abc1234..def5678  main -> main</span>
+    </div>
+  </div>
+
+  <div class="steps" style="margin-top:20px">
+    <div class="step">
+      <div class="sn">3</div>
+      <div class="sb2">
+        <h4>Запусти вручную из Actions</h4>
+        <p>GitHub.com → репозиторий → вкладка <strong>Actions</strong> → слева «Price Monitor...» → кнопка <strong>«Run workflow»</strong> → Run workflow</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">4</div>
+      <div class="sb2">
+        <h4>Смотри лог — что происходит</h4>
+        <p>Нажми на запущенный job. Ожидаемый успешный лог:<br><br>
+        <code>📡 Проверка ScraperAPI аккаунта...</code><br>
+        <code>✅ Аккаунт активен | Запросов осталось: 248500 из 250000</code><br>
+        <code>🔵 Ozon: получаем страницу через ScraperAPI...</code><br>
+        <code>🌐 ScraperAPI запрос (попытка 1/3): https://ozon.ru/...</code><br>
+        <code>✅ Получено 185,432 символов HTML</code><br>
+        <code>💰 Цена найдена методом [JSON-LD]: 45 990 ₽</code></p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="sn">5</div>
+      <div class="sb2">
+        <h4>Ожидаемое время работы</h4>
+        <p>ScraperAPI с JS-рендерингом работает медленнее прямых запросов. Ожидаемое время:<br>
+        • Wildberries: 5–10 секунд на товар<br>
+        • Ozon: 30–70 секунд на товар (JS-рендеринг)<br>
+        • Яндекс.Маркет: 45–90 секунд на товар (premium)<br><br>
+        10 товаров = примерно 10–15 минут. GitHub Actions позволяет до 6 часов.</p>
+      </div>
+    </div>
+  </div>
+
+  <button class="dbtn" onclick="done(this,'first-run')">🚀 Запуск выполнен успешно!</button>
+</section>
+
+<!-- ══ ОШИБКИ ══ -->
+<section class="sec" id="errors">
+  <div class="sl">Устранение проблем</div>
+  <div class="st">Ошибки и решения</div>
+  <div class="ss">Нажмите на ошибку чтобы увидеть подробное решение</div>
+
+  <div class="acc">
+    <div class="ai">
+      <div class="ah" onclick="tog(this)">
+        <div class="ahl"><span style="font-size:16px">🔑</span><div><div class="ae">SCRAPER_API_KEY не задан</div><div class="at">Уведомление пропущено, ScraperAPI не работает</div></div></div>
+        <span class="aa">▼</span>
+      </div>
+      <div class="ab">
+        <p><strong>Причина:</strong> Секрет не добавлен в GitHub Secrets или написан с ошибкой.</p>
+        <p><strong>Решение:</strong><br>
+        1. Репозиторий → Settings → Secrets → Actions<br>
+        2. Проверьте что есть секрет с именем <code>SCRAPER_API_KEY</code> (заглавными буквами)<br>
+        3. Если нет — нажмите «New repository secret», введите имя и ключ<br>
+        4. Ключ берётся из дашборда ScraperAPI на главной странице</p>
+      </div>
+    </div>
+
+    <div class="ai">
+      <div class="ah" onclick="tog(this)">
+        <div class="ahl"><span style="font-size:16px">💳</span><div><div class="ae">HTTP 403 от ScraperAPI</div><div class="at">Лимит запросов исчерпан или проблема с аккаунтом</div></div></div>
+        <span class="aa">▼</span>
+      </div>
+      <div class="ab">
+        <p><strong>Причина 1:</strong> Исчерпан лимит запросов бесплатного плана (1000/мес). Для реальной работы нужен платный план.</p>
+        <p><strong>Проверьте:</strong> Зайдите в дашборд ScraperAPI → посмотрите статистику использования.</p>
+        <p><strong>Причина 2:</strong> Оплата не прошла или аккаунт заморожен.</p>
+        <p><strong>Решение:</strong> Обновите платёжные данные в аккаунте ScraperAPI или перейдите на платный план.</p>
+      </div>
+    </div>
+
+    <div class="ai">
+      <div class="ah" onclick="tog(this)">
+        <div class="ahl"><span style="font-size:16px">⏱️</span><div><div class="ae">Таймаут 70с / 408 от ScraperAPI</div><div class="at">Страница не загрузилась за отведённое время</div></div></div>
+        <span class="aa">▼</span>
+      </div>
+      <div class="ab">
+        <p><strong>Причина:</strong> Ozon или ЯМ грузится медленно, ScraperAPI не успел отрендерить JS за 70 секунд.</p>
+        <p><strong>Решение 1:</strong> Скрипт автоматически повторит попытку (до 3 раз) — обычно со второй-третьей попытки работает.</p>
+        <p><strong>Решение 2:</strong> Если постоянно таймаутит — это нормально для Яндекс.Маркет. Убедитесь что <code>SCRAPER_PREMIUM=true</code> в Secrets.</p>
+      </div>
+    </div>
+
+    <div class="ai">
+      <div class="ah" onclick="tog(this)">
+        <div class="ahl"><span style="font-size:16px">💰</span><div><div class="ae">Цена не найдена ни одним методом</div><div class="at">ScraperAPI вернул HTML но цены нет</div></div></div>
+        <span class="aa">▼</span>
+      </div>
+      <div class="ab">
+        <p><strong>Причина 1:</strong> Ozon/ЯМ изменил структуру страницы — наши регулярные выражения устарели. Такое бывает раз в несколько месяцев.</p>
+        <p><strong>Решение 1:</strong> Откройте issue или сообщите мне — обновим парсер.</p>
+        <p><strong>Причина 2:</strong> ScraperAPI не полностью загрузил JavaScript (страница открылась частично).</p>
+        <p><strong>Решение 2:</strong> Подождите следующего автоматического запуска — обычно проходит.</p>
+        <p><strong>Причина 3:</strong> Товар снят с продажи или недоступен в вашем регионе.</p>
+        <p><strong>Решение 3:</strong> Проверьте URL вручную в браузере.</p>
+      </div>
+    </div>
+
+    <div class="ai">
+      <div class="ah" onclick="tog(this)">
+        <div class="ahl"><span style="font-size:16px">🐢</span><div><div class="ae">Actions занимает 15+ минут</div><div class="at">Слишком много товаров или медленные ответы</div></div></div>
+        <span class="aa">▼</span>
+      </div>
+      <div class="ab">
+        <p><strong>Причина:</strong> JS-рендеринг через ScraperAPI занимает 30–90 секунд на товар. 10 товаров = 7–15 минут. Это нормально.</p>
+        <p><strong>Ограничение:</strong> GitHub Actions позволяет запуску работать до 6 часов — этого более чем достаточно.</p>
+        <p><strong>Совет:</strong> Если мониторите 20+ товаров на Ozon/ЯМ — запуск может занять 30–40 минут. Это нормально, Actions справится.</p>
+      </div>
+    </div>
+
+    <div class="ai">
+      <div class="ah" onclick="tog(this)">
+        <div class="ahl"><span style="font-size:16px">🤖</span><div><div class="ae">Telegram молчит, цена упала а уведомления нет</div><div class="at">Проблема с Telegram настройкой</div></div></div>
+        <span class="aa">▼</span>
+      </div>
+      <div class="ab">
+        <p><strong>Проверьте по порядку:</strong><br>
+        1. Написали ли вы боту <code>/start</code>? Без этого бот не может писать первым.<br>
+        2. Правильный ли <code>TELEGRAM_CHAT_ID</code>? Проверьте через <code>@userinfobot</code><br>
+        3. Правильный ли <code>TELEGRAM_BOT_TOKEN</code>? Проверьте в BotFather командой <code>/mybots</code><br>
+        4. Достигает ли цена порога? Если threshold=10 а цена упала на 8% — уведомления не будет</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ СОВЕТЫ ══ -->
+<section class="sec" id="limits">
+  <div class="sl">Важно знать</div>
+  <div class="st">Лимиты, советы и обслуживание</div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Ситуация</th><th>Что делать</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Баланс ScraperAPI заканчивается</strong></td><td>Скрипт отправит предупреждение в Telegram когда останется &lt;50 запросов. Пополните баланс в дашборде.</td></tr>
+        <tr><td><strong>Добавить новый товар</strong></td><td>Отредактируйте <code>config/products.json</code> → git add → commit → push. При следующем запуске новый товар будет проверен.</td></tr>
+        <tr><td><strong>Временно отключить товар</strong></td><td>В products.json установите <code>"active": false</code> — товар пропускается, но история сохраняется.</td></tr>
+        <tr><td><strong>Ozon изменил структуру сайта</strong></td><td>Ждите обновления парсера. Wildberries при этом продолжает работать без изменений.</td></tr>
+        <tr><td><strong>Много ошибок у ЯМ</strong></td><td>Яндекс.Маркет — самый сложный сайт. 30–40% ошибок — это нормально. Следующий запуск обычно успешен.</td></tr>
+        <tr><td><strong>Просмотр истории цен</strong></td><td>Дашборд на GitHub Pages. Нажмите на строку товара → откроется график.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="info ok3" style="margin-top:20px">
+    <div class="ii">🎯</div>
+    <div class="ib">
+      <div class="it">Реалистичные ожидания по надёжности</div>
+      <div class="ix">
+        <strong>Wildberries:</strong> 99%+ — официальное API, не блокируется<br>
+        <strong>Ozon через ScraperAPI:</strong> 80–90% успешных запросов<br>
+        <strong>Яндекс.Маркет через ScraperAPI:</strong> 60–80% (сложная защита, но работает)<br><br>
+        Даже при 70% успешности за 8 запусков/день цена будет получена минимум 5–6 раз в день — более чем достаточно для мониторинга.
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<script>
+const STEPS=['how','register','pricing','secrets','code-explain','first-run'];
+let done_arr=JSON.parse(localStorage.getItem('sapi_done')||'[]');
+
+function done(btn,id){
+  if(btn.classList.contains('done2'))return;
+  btn.classList.add('done2');btn.innerHTML='✓ Выполнено!';
+  if(!done_arr.includes(id)){done_arr.push(id);localStorage.setItem('sapi_done',JSON.stringify(done_arr))}
+  updateProg();
+  const idx=STEPS.indexOf(id);
+  if(idx>=0&&idx<STEPS.length-1){
+    setTimeout(()=>{
+      const nxt=document.getElementById(STEPS[idx+1]);
+      if(nxt)nxt.scrollIntoView({behavior:'smooth',block:'start'});
+    },400);
+  }
+}
+
+function updateProg(){
+  const pct=Math.round(done_arr.length/STEPS.length*100);
+  document.getElementById('pf').style.width=pct+'%';
+  document.getElementById('pt').textContent=done_arr.length+' / '+STEPS.length+' шагов';
+  STEPS.forEach(id=>{
+    const nl=document.querySelector(`.nl[href="#${id}"]`);
+    if(nl&&done_arr.includes(id))nl.classList.add('done');
+  });
+}
+
+function restoreDone(){
+  STEPS.forEach(id=>{
+    if(done_arr.includes(id)){
+      const sec=document.getElementById(id);
+      if(!sec)return;
+      const btn=sec.querySelector('.dbtn');
+      if(btn){btn.classList.add('done2');btn.innerHTML='✓ Выполнено!'}
+    }
+  });
+  updateProg();
+}
+
+function tog(head){head.closest('.ai').classList.toggle('open')}
+
+function copyT(btn){
+  const body=btn.closest('.term').querySelector('.tbody');
+  const cmds=[];
+  body.querySelectorAll('.cm').forEach(el=>cmds.push(el.textContent.trim()));
+  const text=cmds.length?cmds.join('\n'):body.innerText;
+  navigator.clipboard.writeText(text).then(()=>{
+    btn.textContent='✓ Скопировано!';btn.classList.add('ok');
+    setTimeout(()=>{btn.textContent='Копировать';btn.classList.remove('ok')},2000);
+  });
+}
+
+// Scroll spy + section reveal
+const io=new IntersectionObserver(e=>{
+  e.forEach(en=>{
+    if(en.isIntersecting){
+      en.target.classList.add('vis');
+      const nl=document.querySelector(`.nl[href="#${en.target.id}"]`);
+      if(nl){document.querySelectorAll('.nl').forEach(n=>n.classList.remove('act'));nl.classList.add('act')}
+    }
+  });
+},{threshold:.05,rootMargin:'-10% 0px -60% 0px'});
+
+document.querySelectorAll('.sec,[id]').forEach(s=>io.observe(s));
+
+document.querySelectorAll('.nl').forEach(nl=>{
+  nl.addEventListener('click',()=>{
+    document.querySelectorAll('.nl').forEach(n=>n.classList.remove('act'));
+    nl.classList.add('act');
+  });
+});
+
+restoreDone();
+</script>
+</body>
+</html>

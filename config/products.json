@@ -1,0 +1,38 @@
+{
+  "products": [
+    {
+      "id": "wb_001",
+      "name": "Пример товара Wildberries",
+      "url": "https://www.wildberries.ru/catalog/12345678/detail.aspx",
+      "marketplace": "wildberries",
+      "alert_threshold": 10,
+      "active": true,
+      "notes": "Описание или заметка о товаре"
+    },
+    {
+      "id": "ozon_001",
+      "name": "Пример товара Ozon",
+      "url": "https://www.ozon.ru/product/example-123456789/",
+      "marketplace": "ozon",
+      "alert_threshold": 15,
+      "active": true,
+      "notes": ""
+    },
+    {
+      "id": "ym_001",
+      "name": "Пример товара Яндекс.Маркет",
+      "url": "https://market.yandex.ru/product--example/12345678",
+      "marketplace": "yandex_market",
+      "alert_threshold": 5,
+      "active": true,
+      "notes": ""
+    }
+  ],
+  "settings": {
+    "check_interval_hours": 3,
+    "default_alert_threshold": 10,
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "timezone": "Europe/Moscow"
+  }
+}

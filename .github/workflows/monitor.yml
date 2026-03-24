@@ -1,0 +1,80 @@
+name: Price Monitor — каждые 3 часа
+
+on:
+  # Автоматический запуск по расписанию (UTC время)
+  # 0,3,6,9,12,15,18,21 UTC = 3,6,9,12,15,18,21,0 МСК (UTC+3)
+  schedule:
+    - cron: '0 0,3,6,9,12,15,18,21 * * *'
+
+  # Ручной запуск из вкладки Actions на GitHub
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Причина ручного запуска (необязательно)'
+        required: false
+        default: 'Тест / отладка'
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # Нужно чтобы сохранять prices.db и дашборд
+
+    steps:
+      # ── Шаг 1: Скачиваем код из репозитория ──────────────────
+      - name: 📥 Checkout репозитория
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Полная история для корректных коммитов
+
+      # ── Шаг 2: Устанавливаем Python ───────────────────────────
+      - name: 🐍 Установка Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'  # Кэшируем пакеты между запусками
+
+      # ── Шаг 3: Устанавливаем зависимости ─────────────────────
+      - name: 📦 Установка зависимостей
+        run: pip install -r requirements.txt
+
+      # ── Шаг 4: Запускаем мониторинг ──────────────────────────
+      - name: 📊 Запуск мониторинга цен
+        env:
+          # ─── ScraperAPI (ОБЯЗАТЕЛЬНО для Ozon и ЯМ) ───────────
+          # Получить ключ: https://www.scraperapi.com → Sign Up
+          # Добавить в: Settings → Secrets → Actions → New secret
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+
+          # Включить Premium прокси (расходует 10 кредитов вместо 1)
+          # Значительно улучшает работу с Яндекс.Маркет
+          # Установите в "true" если ЯМ часто не парсится
+          SCRAPER_PREMIUM: ${{ secrets.SCRAPER_PREMIUM }}
+
+          # ─── Telegram уведомления ──────────────────────────────
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          cd src
+          python monitor.py
+
+      # ── Шаг 5: Сохраняем результаты в репозиторий ────────────
+      - name: 💾 Коммит обновлённых данных
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "Price Monitor Bot"
+
+          # Добавляем только нужные файлы
+          git add data/prices.db docs/index.html
+
+          # Коммитим только если есть реальные изменения
+          git diff --staged --quiet || \
+            git commit -m "📊 Цены обновлены $(date +'%d.%m.%Y %H:%M') UTC"
+
+      # ── Шаг 6: Пушим на GitHub ────────────────────────────────
+      - name: 🚀 Push обновлений
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
