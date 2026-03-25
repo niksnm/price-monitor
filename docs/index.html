@@ -235,7 +235,7 @@
       <div class="logo-sub">Мониторинг цен на маркетплейсах</div>
     </div>
   </div>
-  <div class="last-update">Обновлено: <span>2026-03-25 19:12</span></div>
+  <div class="last-update">Обновлено: <span>2026-03-25 21:56</span></div>
 </header>
 
 <div class="stats-row">
@@ -246,7 +246,7 @@
   </div>
   <div class="stat-card">
     <div class="stat-label">Проверок</div>
-    <div class="stat-value">52</div>
+    <div class="stat-value">57</div>
     <div class="stat-sub">всего замеров цен</div>
   </div>
   <div class="stat-card">
@@ -286,10 +286,10 @@
           </td>
           <td><span class="badge ym">ЯМ</span></td>
           <td class="td-price"><b>8 415 ₽</b></td>
-          <td><span class="change down">▼ 0.1%</span></td>
+          <td><span class="change neutral">→ 0%</span></td>
           <td>✅</td>
           <td class="td-threshold">5%</td>
-          <td class="td-time">2026-03-25 19:12</td>
+          <td class="td-time">2026-03-25 21:56</td>
         </tr>
         <tr onclick="showChart('ym_001')" class="product-row" title="Нажмите для просмотра графика">
           <td class="td-name">
@@ -297,11 +297,11 @@
             
           </td>
           <td><span class="badge ym">ЯМ</span></td>
-          <td class="td-price"><b>70 835 ₽</b></td>
-          <td><span class="change down">▼ 99.2%</span></td>
+          <td class="td-price"><b>70 625 ₽</b></td>
+          <td><span class="change down">▼ 0.3%</span></td>
           <td>✅</td>
           <td class="td-threshold">5%</td>
-          <td class="td-time">2026-03-25 19:11</td>
+          <td class="td-time">2026-03-25 21:55</td>
         </tr>
         <tr onclick="showChart('ym_003')" class="product-row" title="Нажмите для просмотра графика">
           <td class="td-name">
@@ -309,11 +309,11 @@
             
           </td>
           <td><span class="badge ym">ЯМ</span></td>
-          <td class="td-price"><b>70 835 ₽</b></td>
-          <td><span class="change down">▼ 96.5%</span></td>
+          <td class="td-price"><b>70 625 ₽</b></td>
+          <td><span class="change down">▼ 0.3%</span></td>
           <td>✅</td>
           <td class="td-threshold">5%</td>
-          <td class="td-time">2026-03-25 19:12</td>
+          <td class="td-time">2026-03-25 21:56</td>
         </tr></tbody></table>
   </div>
 </div>
@@ -323,7 +323,7 @@
 </footer>
 
 <script>
-const CHARTS_DATA = {"ym_002": {"labels": ["2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25"], "prices": [10428.0, 10428.0, 10428.0, 8420.0, 8415.0]}, "ym_001": {"labels": ["2026-03-24", "2026-03-24", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25"], "prices": [89163.0, 126001.0, 88165.0, 88165.0, 88165.0, 88165.0, 88165.0, 89056.0, 8449000.0, 70835.0]}, "ym_003": {"labels": ["2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25"], "prices": [88165.0, 88165.0, 88165.0, 89056.0, 2021490.0, 70835.0]}};
+const CHARTS_DATA = {"ym_002": {"labels": ["2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25"], "prices": [10428.0, 10428.0, 10428.0, 8420.0, 8415.0, 8415.0]}, "ym_001": {"labels": ["2026-03-24", "2026-03-24", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25"], "prices": [89163.0, 126001.0, 88165.0, 88165.0, 88165.0, 88165.0, 88165.0, 89056.0, 8449000.0, 70835.0, 70625.0]}, "ym_003": {"labels": ["2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25", "2026-03-25"], "prices": [88165.0, 88165.0, 88165.0, 89056.0, 2021490.0, 70835.0, 70625.0]}};
 let currentChart = null;
 
 function showChart(productId) {
