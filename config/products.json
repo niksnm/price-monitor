@@ -44,7 +44,7 @@
       "alert_threshold": 5,
       "active": true,
       "notes": ""
-    } ,
+    },
   ],
   "settings": {
     "check_interval_hours": 3,
