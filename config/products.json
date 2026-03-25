@@ -26,7 +26,7 @@
       "alert_threshold": 5,
       "active": true,
       "notes": ""
-    }
+    },
     {
       "id": "ym_002",
       "name": "Видеорегистратор зеркало автомобильный, для автомобиля, Appix, регистратор с камерой заднего вида, 4к, CarPlay",
@@ -35,7 +35,7 @@
       "alert_threshold": 5,
       "active": true,
       "notes": ""
-    }
+    },
    {
       "id": "ym_003",
       "name": "Стулья-кресла для кухни Альтаир, в графитовом цвете, комплект 2 штуки",
@@ -44,7 +44,7 @@
       "alert_threshold": 5,
       "active": true,
       "notes": ""
-    } 
+    } ,
   ],
   "settings": {
     "check_interval_hours": 3,
