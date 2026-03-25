@@ -2,26 +2,44 @@
   "products": [
     {
       "id": "wb_001",
-      "name": "Пример товара Wildberries",
-      "url": "https://www.wildberries.ru/catalog/12345678/detail.aspx",
+      "name": "Джоггеры джинсовые на резинке спортивные брюки карго",
+      "url": "https://www.wildberries.ru/catalog/218412789/detail.aspx",
       "marketplace": "wildberries",
-      "alert_threshold": 10,
+      "alert_threshold": 5,
       "active": true,
       "notes": "Описание или заметка о товаре"
     },
-    {
+     {
       "id": "ozon_001",
-      "name": "Пример товара Ozon",
-      "url": "https://www.ozon.ru/product/example-123456789/",
+      "name": "Профиль решетки радиатора Opel ОЕМ 13368852",
+      "url": "https://www.ozon.ru/product/reshetka-radiatora-dlya-opel-astra-j-2009-2012-opel-astra-j-reshetka-radiatora-de-ga-opl09as016-1035455777/",
       "marketplace": "ozon",
-      "alert_threshold": 15,
+      "alert_threshold": 5,
       "active": true,
       "notes": ""
     },
     {
       "id": "ym_001",
-      "name": "Пример товара Яндекс.Маркет",
-      "url": "https://market.yandex.ru/product--example/12345678",
+      "name": "Игровая приставка Valve Steam Deck LCD 1 ТБ SSD",
+      "url": "https://market.yandex.ru/card/igrovaya-pristavka-valve-steam-deck-lcd-1-tb-ssd/4824518400?do-waremd5=VmvyOIXl_5uU1O61l_hmGw&sponsored=1&cpc=w9DBCWz2kix8B7Bi2lm2VYL1afmT9VyXT4pYKrwfrEA0bZQBQEH-E41l8uyrGYVaI4DIoQOQ5NX-SGkm9ozibSY2B5UkE5fT5q-LUe212zlDfahrQ9ApjKsdUtXaqu_9F_U1X1RXU9iOVNveS53OeEn39zuzohD9YbF7rc04odgUOSeIBfAZHymIHuAwBwv5eFNr6lkd3iObJeOFQ9ayAnxwUVk_iLWszza4GV_0DSnBDGFMUVAgwhXIo09lOWeqpWLRSJyqxC7l7ROAH0zDzQ%2C%2C&ogV=-12",
+      "marketplace": "yandex_market",
+      "alert_threshold": 5,
+      "active": true,
+      "notes": ""
+    },
+    {
+      "id": "ym_002",
+      "name": "Видеорегистратор зеркало автомобильный, для автомобиля, Appix, регистратор с камерой заднего вида, 4к, CarPlay",
+      "url": "https://market.yandex.ru/card/videoregistrator-avtomobilnyy-zerkalo-appix--zerkalo-registrator-s-kameroy-zadnego-vida/4604092846?nid=71664071&isComfortPlus=false&offerid=fr5hB2keHJQpr-kDwHNzjA&cpa=1&hid=71664065&cpc=UECmRzShgdCaz1bPfIn70SPSslBLIsZhuygPc1PuiZ2F7rx8IKjaS7Ma9vzpSBOPeMW6GZDoKiMNRr86WwjWC0WVva1pUecxHAPXS9lc4SM3PeHrOq0bm-FA-HpdNpVtUEeSImcigOfJplzVwm-n1lQgAh5Kk3bfU0iMVxssW10uiVOF0SCY8x1mW_oBMDY-kqp9Qksdl5GkwfK5Db7UUJFIYAu-CBh5J2lMb8xUIC768p-9fQmah5YzJKnfM28szdAdumBNqyq7T9BPRYOZpFD6Td_CvDcF9HA7OzUvUOcqI1bwVvJ4ftOxg9STjtPG6l0Yt8sBIq3RuufkHKTxjg%2C%2C&publicId=niks-nm&utm_medium=sharing&stock_amount=10&ogV=157&do-waremd5=fr5hB2keHJQpr-kDwHNzjA",
+      "marketplace": "yandex_market",
+      "alert_threshold": 5,
+      "active": true,
+      "notes": ""
+    },
+   {
+      "id": "ym_003",
+      "name": "Стулья-кресла для кухни Альтаир, в графитовом цвете, комплект 2 штуки",
+      "url": "https://market.yandex.ru/card/igrovaya-pristavka-valve-steam-deck-lcd-1-tb-ssd/4824518400?do-waremd5=VmvyOIXl_5uU1O61l_hmGw&sponsored=1&cpc=w9DBCWz2kix8B7Bi2lm2VYL1afmT9VyXT4pYKrwfrEA0bZQBQEH-E41l8uyrGYVaI4DIoQOQ5NX-SGkm9ozibSY2B5UkE5fT5q-LUe212zlDfahrQ9ApjKsdUtXaqu_9F_U1X1RXU9iOVNveS53OeEn39zuzohD9YbF7rc04odgUOSeIBfAZHymIHuAwBwv5eFNr6lkd3iObJeOFQ9ayAnxwUVk_iLWszza4GV_0DSnBDGFMUVAgwhXIo09lOWeqpWLRSJyqxC7l7ROAH0zDzQ%2C%2C&ogV=-12",
       "marketplace": "yandex_market",
       "alert_threshold": 5,
       "active": true,
@@ -30,7 +48,7 @@
   ],
   "settings": {
     "check_interval_hours": 3,
-    "default_alert_threshold": 10,
+    "default_alert_threshold": 5,
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "timezone": "Europe/Moscow"
