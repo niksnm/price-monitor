@@ -1,180 +1,116 @@
 """
-notifier/telegram.py — отправка уведомлений через Telegram Bot API
+notifier/telegram.py — Telegram уведомления v4
+===============================================
+
+ТИПЫ УВЕДОМЛЕНИЙ:
+  1. 🆕 Новый товар — при первой успешной проверке
+  2. 🚨 Цена упала  — когда падение >= threshold%
+  3. ⚠️  Системные  — баланс API и прочее
 """
 
 import os
 import requests
-from typing import Optional
 from datetime import datetime
+from typing import Optional
 
 
-def send_message(text: str, parse_mode: str = "HTML") -> bool:
-    """
-    Отправляет сообщение в Telegram чат.
-
-    Токен и chat_id берутся из переменных окружения:
-      TELEGRAM_BOT_TOKEN — токен бота от @BotFather
-      TELEGRAM_CHAT_ID   — ID вашего чата/канала
-
-    Returns:
-        True если сообщение отправлено успешно, False если ошибка
-    """
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-
+def _send(text: str, parse_mode: str = 'HTML') -> bool:
+    """Отправляет сообщение в Telegram."""
+    token   = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID', '').strip()
     if not token or not chat_id:
-        print("⚠️  TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID не заданы — "
-              "уведомление пропущено")
+        print('⚠️  TELEGRAM не настроен — пропускаем уведомление')
+        return False
+    try:
+        resp = requests.post(
+            f'https://api.telegram.org/bot{token}/sendMessage',
+            json={'chat_id': chat_id, 'text': text,
+                  'parse_mode': parse_mode, 'disable_web_page_preview': False},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        print('✅ Telegram: отправлено')
+        return True
+    except Exception as e:
+        print(f'❌ Telegram ошибка: {e}')
         return False
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": parse_mode,
-        "disable_web_page_preview": False,
-    }
 
-    try:
-        resp = requests.post(url, json=payload, timeout=10)
-        resp.raise_for_status()
-        print(f"✅ Telegram уведомление отправлено")
-        return True
-    except requests.exceptions.HTTPError as e:
-        print(f"❌ Ошибка Telegram API: {e} — {resp.text}")
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Ошибка сети при отправке в Telegram: {e}")
-
-    return False
+def _fmt(price: float) -> str:
+    return f'{price:,.0f}'.replace(',', '\u202f')
 
 
-def format_price_drop_alert(
-    product_name: str,
-    marketplace: str,
-    old_price: float,
-    new_price: float,
-    change_percent: float,
-    url: str,
-    threshold: float
-) -> str:
+def _now() -> str:
+    return datetime.now().strftime('%d.%m.%Y %H:%M')
+
+
+MP_ICONS = {
+    'wildberries':   '🍇 Wildberries',
+    'ozon':          '🔵 Ozon',
+    'yandex_market': '🟡 Яндекс.Маркет',
+}
+
+
+def send_new_product_alert(product_name: str, marketplace: str,
+                           price: float, url: str, threshold: float) -> bool:
     """
-    Форматирует красивое уведомление о падении цены.
-
-    Пример вывода:
-    🚨 СНИЖЕНИЕ ЦЕНЫ на 23.5%!
-
-    📦 Nike Air Max 90
-    🏪 Wildberries
-
-    💰 Было:   8 500 ₽
-    🔥 Стало:  6 500 ₽
-    📉 Скидка: −2 000 ₽ (−23.5%)
-
-    ⚡ Порог уведомления: 10%
-
-    🔗 Перейти к товару
-    🕐 22.03.2025 14:30
+    Уведомление при первой успешной проверке нового товара.
+    Сообщает стартовую (базовую) цену с которой будут считаться все изменения.
     """
-    marketplace_icons = {
-        "wildberries": "🍇 Wildberries",
-        "ozon": "🔵 Ozon",
-        "yandex_market": "🟡 Яндекс.Маркет",
-    }
-    mp_label = marketplace_icons.get(marketplace.lower(), f"🏪 {marketplace}")
+    mp = MP_ICONS.get(marketplace.lower(), f'🏪 {marketplace}')
+    text = (
+        f'🆕 <b>Новый товар добавлен в мониторинг!</b>\n\n'
+        f'📦 <b>{product_name}</b>\n'
+        f'🏪 {mp}\n\n'
+        f'💰 Стартовая цена: <b>{_fmt(price)} ₽</b>\n'
+        f'📊 Все изменения будут считаться от этой цены\n'
+        f'⚡ Уведомлю при снижении на <b>{threshold}%</b> и более\n\n'
+        f'🔗 <a href="{url}">Открыть товар</a>\n'
+        f'🕐 {_now()}'
+    )
+    return _send(text)
 
-    diff = new_price - old_price  # Отрицательное число
-    now = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-    # Форматирование чисел с пробелами (8500 → 8 500)
-    def fmt(n: float) -> str:
-        return f"{n:,.0f}".replace(",", " ")
+def send_price_drop_alert(product_name: str, marketplace: str,
+                          old_price: float, new_price: float,
+                          change_percent: float, url: str, threshold: float,
+                          baseline_price: Optional[float] = None) -> bool:
+    """
+    Уведомление о падении цены.
+    Если есть baseline_price — показывает также изменение от стартовой цены.
+    """
+    mp = MP_ICONS.get(marketplace.lower(), f'🏪 {marketplace}')
+    diff = new_price - old_price
 
     text = (
-        f"🚨 <b>СНИЖЕНИЕ ЦЕНЫ на {abs(change_percent):.1f}%!</b>\n\n"
-        f"📦 <b>{product_name}</b>\n"
-        f"🏪 {mp_label}\n\n"
-        f"💰 Было:   <s>{fmt(old_price)} ₽</s>\n"
-        f"🔥 Стало:  <b>{fmt(new_price)} ₽</b>\n"
-        f"📉 Скидка: <b>−{fmt(abs(diff))} ₽ (−{abs(change_percent):.1f}%)</b>\n\n"
-        f"⚡ Порог уведомления: {threshold}%\n\n"
-        f"🔗 <a href=\"{url}\">Перейти к товару</a>\n"
-        f"🕐 {now}"
-    )
-    return text
-
-
-def format_error_alert(product_name: str, marketplace: str,
-                        error: str, url: str) -> str:
-    """Форматирует уведомление об ошибке парсинга (отправляется раз в сутки)."""
-    return (
-        f"⚠️ <b>Ошибка парсинга</b>\n\n"
-        f"📦 {product_name}\n"
-        f"🏪 {marketplace}\n"
-        f"❗ {error}\n\n"
-        f"🔗 <a href=\"{url}\">Ссылка на товар</a>"
+        f'🚨 <b>СНИЖЕНИЕ ЦЕНЫ на {abs(change_percent):.1f}%!</b>\n\n'
+        f'📦 <b>{product_name}</b>\n'
+        f'🏪 {mp}\n\n'
+        f'💰 Было:   <s>{_fmt(old_price)} ₽</s>\n'
+        f'🔥 Стало:  <b>{_fmt(new_price)} ₽</b>\n'
+        f'📉 Скидка: <b>−{_fmt(abs(diff))} ₽ (−{abs(change_percent):.1f}%)</b>\n'
     )
 
+    if baseline_price and abs(baseline_price - old_price) > 1:
+        base_diff = new_price - baseline_price
+        base_pct  = (base_diff / baseline_price) * 100
+        if base_diff < 0:
+            text += (
+                f'\n📊 От стартовой цены ({_fmt(baseline_price)} ₽):\n'
+                f'   <b>−{_fmt(abs(base_diff))} ₽ (−{abs(base_pct):.1f}%)</b>\n'
+            )
 
-def format_daily_summary(products_data: list) -> str:
-    """
-    Форматирует ежедневный отчёт со статусом всех товаров.
-    products_data — список словарей с данными о товарах.
-    """
-    lines = ["📊 <b>Ежедневный отчёт по ценам</b>\n"]
-    lines.append(f"🕐 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
-
-    for p in products_data:
-        price = p.get("price")
-        name = p.get("name", "—")[:40]
-        change = p.get("change_percent", 0)
-
-        if price is None:
-            icon = "❓"
-            price_str = "н/д"
-        elif change < -5:
-            icon = "📉"
-            price_str = f"{price:,.0f} ₽ ({change:+.1f}%)".replace(",", " ")
-        elif change > 5:
-            icon = "📈"
-            price_str = f"{price:,.0f} ₽ ({change:+.1f}%)".replace(",", " ")
-        else:
-            icon = "➡️"
-            price_str = f"{price:,.0f} ₽".replace(",", " ")
-
-        lines.append(f"{icon} {name}\n    {price_str}")
-
-    return "\n".join(lines)
-
-
-def send_price_drop_alert(
-    product_name: str,
-    marketplace: str,
-    old_price: float,
-    new_price: float,
-    change_percent: float,
-    url: str,
-    threshold: float
-) -> bool:
-    """Главная функция — отправляет уведомление о падении цены."""
-    text = format_price_drop_alert(
-        product_name, marketplace, old_price,
-        new_price, change_percent, url, threshold
+    text += (
+        f'\n⚡ Порог уведомления: {threshold}%\n\n'
+        f'🔗 <a href="{url}">Перейти к товару</a>\n'
+        f'🕐 {_now()}'
     )
-    return send_message(text)
+    return _send(text)
+
+
+def send_message(text: str) -> bool:
+    return _send(text)
 
 
 def test_connection() -> bool:
-    """Тестирует подключение к Telegram — отправляет тестовое сообщение."""
-    msg = (
-        "✅ <b>Тест подключения</b>\n\n"
-        "Мониторинг цен успешно настроен!\n"
-        "Уведомления о снижении цен будут приходить сюда.\n\n"
-        f"🕐 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-    )
-    return send_message(msg)
-
-
-if __name__ == "__main__":
-    print("Отправляем тестовое сообщение...")
-    result = test_connection()
-    print("Успешно!" if result else "Ошибка — проверьте токен и chat_id")
+    return _send(f'✅ <b>Тест подключения Price Monitor</b>\n🕐 {_now()}')

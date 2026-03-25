@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Генератор products.json</title>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@700;900&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07090e;--bg2:#0b0f1a;--surf:#111927;--surf2:#182236;--surf3:#1e2d45;
+  --b:#1e2d44;--b2:#253652;
+  --a:#3b82f6;--g:#10b981;--g2:#34d399;--y:#f59e0b;--r:#f43f5e;--p:#8b5cf6;
+  --t:#e2e8f0;--t2:#94a3b8;--t3:#4b6282;
+  --wb:#cb11ab;--oz:#005bff;--ym:#fc3f1d;
+  --mono:'JetBrains Mono',monospace;
+  --head:'Unbounded',sans-serif;
+  --body:'Golos Text',sans-serif;
+}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--body);background:var(--bg);color:var(--t);min-height:100vh;line-height:1.6}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--b2);border-radius:3px}
+
+/* ── LAYOUT ── */
+.page{max-width:960px;margin:0 auto;padding:40px 24px 80px}
+
+/* ── HEADER ── */
+.hdr{text-align:center;margin-bottom:40px}
+.hdr-icon{width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,var(--a),var(--p));display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 16px;box-shadow:0 0 28px rgba(59,130,246,.35)}
+.hdr h1{font-family:var(--head);font-size:26px;font-weight:900;letter-spacing:-.5px;margin-bottom:8px}
+.hdr h1 em{font-style:normal;background:linear-gradient(135deg,var(--a),var(--p));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hdr p{font-size:14px;color:var(--t2);max-width:520px;margin:0 auto}
+
+/* ── CARD ── */
+.card{background:var(--surf);border:1px solid var(--b);border-radius:16px;padding:28px;margin-bottom:20px}
+.card-title{font-size:13px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:1px;margin-bottom:18px;display:flex;align-items:center;gap:8px}
+.card-title::before{content:'';width:3px;height:16px;background:linear-gradient(180deg,var(--a),var(--p));border-radius:2px}
+
+/* ── FORM ── */
+.field{margin-bottom:18px}
+.label{display:block;font-size:12px;font-weight:700;color:var(--t2);margin-bottom:7px;letter-spacing:.3px}
+.label span{color:var(--r);margin-left:2px}
+.hint{font-size:11px;color:var(--t3);margin-top:5px;line-height:1.5}
+input[type=text],input[type=number],select,textarea{
+  width:100%;background:var(--bg2);border:1px solid var(--b2);
+  border-radius:10px;padding:11px 14px;font-family:var(--mono);
+  font-size:13px;color:var(--t);outline:none;transition:border-color .2s;
+}
+input[type=text]:focus,input[type=number]:focus,
+select:focus,textarea:focus{border-color:var(--a)}
+input[type=text]::placeholder,textarea::placeholder{color:var(--t3)}
+select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%234b6282' stroke-width='2' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center}
+select option{background:var(--surf2)}
+textarea{resize:vertical;min-height:70px;font-family:var(--body);font-size:13px}
+
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+
+/* ── URL DETECT ── */
+.url-wrap{position:relative}
+.url-badge{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;pointer-events:none;transition:all .2s}
+.badge-wb{background:rgba(203,17,171,.15);color:var(--wb);border:1px solid rgba(203,17,171,.3)}
+.badge-oz{background:rgba(0,91,255,.15);color:#6fa3ff;border:1px solid rgba(0,91,255,.3)}
+.badge-ym{background:rgba(252,63,29,.15);color:#ff8a70;border:1px solid rgba(252,63,29,.3)}
+.badge-ok{background:rgba(16,185,129,.12);color:var(--g2);border:1px solid rgba(16,185,129,.25)}
+.badge-q{background:rgba(75,98,130,.15);color:var(--t3);border:1px solid var(--b2)}
+
+/* ── MARKETPLACE SELECT ── */
+.mp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.mp-btn{background:var(--surf2);border:2px solid var(--b);border-radius:12px;padding:14px 10px;text-align:center;cursor:pointer;transition:all .2s;font-size:12px;font-weight:700;color:var(--t2)}
+.mp-btn:hover{border-color:var(--b2);color:var(--t)}
+.mp-btn.sel-wb{background:rgba(203,17,171,.1);border-color:var(--wb);color:var(--wb)}
+.mp-btn.sel-oz{background:rgba(0,91,255,.1);border-color:#4d9fff;color:#6fa3ff}
+.mp-btn.sel-ym{background:rgba(252,63,29,.1);border-color:var(--ym);color:#ff8a70}
+.mp-icon{font-size:22px;display:block;margin-bottom:5px}
+
+/* ── THRESHOLD SLIDER ── */
+.slider-wrap{display:flex;align-items:center;gap:14px}
+input[type=range]{
+  flex:1;-webkit-appearance:none;appearance:none;
+  height:4px;background:var(--surf3);border-radius:2px;outline:none;cursor:pointer;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:18px;height:18px;border-radius:50%;
+  background:linear-gradient(135deg,var(--a),var(--p));cursor:pointer;
+  box-shadow:0 0 6px rgba(59,130,246,.4);
+}
+.slider-val{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--a);min-width:45px;text-align:center}
+
+/* ── TOGGLE ── */
+.toggle-wrap{display:flex;align-items:center;gap:12px}
+.toggle{position:relative;width:44px;height:24px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0;position:absolute}
+.toggle-slider{position:absolute;inset:0;background:var(--surf3);border-radius:12px;cursor:pointer;transition:background .2s;border:1px solid var(--b2)}
+.toggle-slider::before{content:'';position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:var(--t3);transition:transform .2s,background .2s}
+.toggle input:checked+.toggle-slider{background:var(--g)}
+.toggle input:checked+.toggle-slider::before{transform:translateX(20px);background:#fff}
+.toggle-label{font-size:13px;font-weight:600}
+
+/* ── GENERATE BUTTON ── */
+.gen-btn{
+  width:100%;padding:16px;border:none;border-radius:14px;
+  background:linear-gradient(135deg,var(--a),var(--p));
+  color:#fff;font-family:var(--body);font-size:15px;font-weight:700;
+  cursor:pointer;transition:all .2s;letter-spacing:.3px;
+  box-shadow:0 4px 20px rgba(59,130,246,.3);
+}
+.gen-btn:hover{transform:translateY(-2px);box-shadow:0 8px 28px rgba(59,130,246,.4)}
+.gen-btn:active{transform:none}
+
+/* ── OUTPUT ── */
+.output{display:none}
+.output.show{display:block}
+.out-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.out-title{font-size:14px;font-weight:700;color:var(--g2)}
+.out-actions{display:flex;gap:8px}
+.act-btn{background:var(--surf2);border:1px solid var(--b2);color:var(--t2);padding:7px 16px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;transition:all .2s;font-family:var(--body)}
+.act-btn:hover{background:var(--a);color:#fff;border-color:var(--a)}
+.act-btn.ok{background:var(--g);color:#fff;border-color:var(--g)}
+.json-preview{background:#040810;border:1px solid var(--b2);border-radius:12px;padding:20px;font-family:var(--mono);font-size:12px;line-height:1.9;overflow-x:auto;white-space:pre}
+.jk{color:#79b8ff}.js{color:var(--g2)}.jn{color:#bd93f9}.jb{color:var(--y)}.jc{color:var(--t3)}
+
+/* ── INSTRUCTION ── */
+.inst{background:var(--surf);border:1px solid var(--b);border-radius:16px;padding:24px;margin-bottom:20px}
+.inst-title{font-size:15px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.steps-list{display:flex;flex-direction:column;gap:12px}
+.step-item{display:flex;gap:12px;align-items:flex-start}
+.step-num{width:26px;height:26px;border-radius:7px;background:var(--surf2);border:1px solid var(--b2);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--a);flex-shrink:0;margin-top:1px}
+.step-body{font-size:13px;color:var(--t2);line-height:1.7}
+.step-body code{font-family:var(--mono);font-size:11px;color:#06b6d4;background:rgba(6,182,212,.08);padding:1px 6px;border-radius:4px}
+.step-body strong{color:var(--t)}
+
+/* ── HISTORY ── */
+.history-wrap{margin-top:32px}
+.hist-title{font-size:13px;font-weight:700;color:var(--t2);margin-bottom:12px;text-transform:uppercase;letter-spacing:.8px}
+.hist-items{display:flex;flex-direction:column;gap:8px}
+.hist-item{
+  background:var(--surf);border:1px solid var(--b);border-radius:12px;
+  padding:12px 16px;display:flex;align-items:center;gap:12px;
+  cursor:pointer;transition:border-color .2s;
+}
+.hist-item:hover{border-color:var(--b2)}
+.hist-mp-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.hist-name{flex:1;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist-mp{font-size:11px;color:var(--t3);font-family:var(--mono);flex-shrink:0}
+.hist-del{color:var(--t3);font-size:14px;flex-shrink:0;padding:2px 6px;border-radius:4px;transition:all .2s}
+.hist-del:hover{background:rgba(244,63,94,.15);color:var(--r)}
+.empty-hist{font-size:13px;color:var(--t3);text-align:center;padding:20px}
+
+/* ── VALIDATION ── */
+.field.err input,.field.err select{border-color:var(--r)}
+.field .err-msg{display:none;font-size:11px;color:var(--r);margin-top:4px}
+.field.err .err-msg{display:block}
+
+/* ── INFO CHIP ── */
+.info-chip{display:inline-flex;align-items:center;gap:6px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:20px;padding:5px 14px;font-size:12px;color:var(--g2);font-weight:600;margin-bottom:20px}
+
+@media(max-width:640px){.row2,.row3{grid-template-columns:1fr}.mp-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="hdr">
+    <div class="hdr-icon">⚙️</div>
+    <h1>Генератор <em>products.json</em></h1>
+    <p>Заполни форму — получи готовый блок кода для вставки в файл конфигурации. Не нужно писать JSON вручную.</p>
+  </div>
+
+  <!-- ИНСТРУКЦИЯ -->
+  <div class="inst">
+    <div class="inst-title">📖 Как пользоваться</div>
+    <div class="steps-list">
+      <div class="step-item">
+        <div class="step-num">1</div>
+        <div class="step-body">Открой страницу товара в браузере (Wildberries, Ozon или Яндекс.Маркет). Скопируй ссылку из адресной строки.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">2</div>
+        <div class="step-body">Вставь ссылку в поле ниже — инструмент <strong>автоматически определит маркетплейс</strong>.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">3</div>
+        <div class="step-body">Заполни название, установи порог уведомления. Нажми <strong>«Сгенерировать»</strong>.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-num">4</div>
+        <div class="step-body">Нажми <strong>«Копировать»</strong>. Открой <code>config/products.json</code> в репозитории → карандаш ✏️ → вставь блок в массив <code>"products": [...]</code> через запятую → Commit.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ФОРМА -->
+  <div class="card">
+    <div class="card-title">Данные товара</div>
+
+    <!-- URL -->
+    <div class="field" id="f-url">
+      <label class="label">Ссылка на товар <span>*</span></label>
+      <div class="url-wrap">
+        <input type="text" id="url" placeholder="https://www.wildberries.ru/catalog/12345678/detail.aspx"
+               oninput="onUrlInput()" autocomplete="off">
+        <span class="url-badge badge-q" id="url-badge">Вставь ссылку</span>
+      </div>
+      <div class="hint">Полная ссылка со страницы товара. Маркетплейс определится автоматически.</div>
+      <div class="err-msg">Вставьте корректную ссылку</div>
+    </div>
+
+    <!-- MARKETPLACE -->
+    <div class="field" id="f-mp">
+      <label class="label">Маркетплейс <span>*</span></label>
+      <div class="mp-grid">
+        <div class="mp-btn" id="btn-wb" onclick="setMp('wildberries')">
+          <span class="mp-icon">🍇</span>Wildberries
+        </div>
+        <div class="mp-btn" id="btn-oz" onclick="setMp('ozon')">
+          <span class="mp-icon">🔵</span>Ozon
+        </div>
+        <div class="mp-btn" id="btn-ym" onclick="setMp('yandex_market')">
+          <span class="mp-icon">🟡</span>Яндекс.Маркет
+        </div>
+      </div>
+      <div class="hint">Определяется автоматически по ссылке. Можно выбрать вручную.</div>
+      <div class="err-msg">Выберите маркетплейс</div>
+    </div>
+
+    <!-- NAME & ID -->
+    <div class="row2">
+      <div class="field" id="f-name">
+        <label class="label">Название товара <span>*</span></label>
+        <input type="text" id="name" placeholder="Nike Air Max 90, белые, р.42" maxlength="200">
+        <div class="hint">Как будет отображаться в Telegram и дашборде</div>
+        <div class="err-msg">Введите название товара</div>
+      </div>
+      <div class="field">
+        <label class="label">ID товара</label>
+        <input type="text" id="pid" placeholder="авто" maxlength="50" oninput="pidManual=true">
+        <div class="hint">Уникальный ключ. Генерируется автоматически, не менять после добавления!</div>
+      </div>
+    </div>
+
+    <!-- THRESHOLD -->
+    <div class="field">
+      <label class="label">Порог уведомления</label>
+      <div class="slider-wrap">
+        <input type="range" id="threshold" min="1" max="50" value="10"
+               oninput="document.getElementById('thr-val').textContent=this.value+'%'">
+        <div class="slider-val" id="thr-val">10%</div>
+      </div>
+      <div class="hint">При снижении цены на этот % и более — придёт уведомление в Telegram. Рекомендуем 10–15%.</div>
+    </div>
+
+    <!-- NOTES & ACTIVE -->
+    <div class="row2">
+      <div class="field">
+        <label class="label">Заметка</label>
+        <textarea id="notes" placeholder="Размер 42, цвет белый..." rows="2"></textarea>
+        <div class="hint">Видна только вам в дашборде. Необязательно.</div>
+      </div>
+      <div class="field">
+        <label class="label">Статус мониторинга</label>
+        <div style="margin-top:8px">
+          <div class="toggle-wrap">
+            <label class="toggle"><input type="checkbox" id="active" checked><span class="toggle-slider"></span></label>
+            <span class="toggle-label" id="active-label">✅ Активен (мониторится)</span>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:10px">Выключите чтобы временно остановить без удаления</div>
+      </div>
+    </div>
+
+    <!-- BUTTON -->
+    <button class="gen-btn" onclick="generate()">⚡ Сгенерировать блок JSON</button>
+  </div>
+
+  <!-- OUTPUT -->
+  <div class="output" id="output">
+    <div class="card">
+      <div class="out-head">
+        <div class="out-title">✅ Готово! Скопируй и вставь в products.json</div>
+        <div class="out-actions">
+          <button class="act-btn" onclick="copyJson()" id="copy-btn">📋 Копировать</button>
+          <button class="act-btn" onclick="resetForm()">🔄 Новый</button>
+        </div>
+      </div>
+      <div class="json-preview" id="json-out"></div>
+
+      <div style="margin-top:18px;padding:16px;background:var(--surf2);border-radius:12px;border:1px solid var(--b2)">
+        <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:var(--y)">📌 Куда вставлять</div>
+        <div style="font-size:13px;color:var(--t2);line-height:1.8">
+          Открой <code style="font-family:var(--mono);font-size:11px;color:#06b6d4;background:rgba(6,182,212,.08);padding:1px 6px;border-radius:4px">config/products.json</code> в репозитории
+          → нажми карандаш ✏️ → найди массив <code style="font-family:var(--mono);font-size:11px;color:#06b6d4;background:rgba(6,182,212,.08);padding:1px 6px;border-radius:4px">"products": [</code>
+          → вставь скопированный блок после последнего <code style="font-family:var(--mono);font-size:11px;color:var(--g2);background:rgba(16,185,129,.08);padding:1px 6px;border-radius:4px">}</code>
+          через запятую → Commit changes.<br><br>
+          <strong>Важно:</strong> не меняй <code style="font-family:var(--mono);font-size:11px;color:#06b6d4;background:rgba(6,182,212,.08);padding:1px 6px;border-radius:4px">"id"</code> после первого запуска — это ключ истории цен.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ИСТОРИЯ -->
+  <div class="history-wrap" id="hist-wrap" style="display:none">
+    <div class="hist-title">📦 Добавленные товары (в этой сессии)</div>
+    <div class="hist-items" id="hist-items"></div>
+  </div>
+
+</div>
+
+<script>
+// ── Состояние ──────────────────────────────────────────────
+let selectedMp = '';
+let pidManual  = false;
+let history    = JSON.parse(localStorage.getItem('pm_gen_hist') || '[]');
+let editMode   = false;
+
+renderHistory();
+
+// ── Определение маркетплейса по URL ───────────────────────
+function detectMp(url) {
+  if (/wildberries\.ru/i.test(url))  return 'wildberries';
+  if (/ozon\.ru/i.test(url))         return 'ozon';
+  if (/market\.yandex/i.test(url))   return 'yandex_market';
+  return '';
+}
+
+function onUrlInput() {
+  const url  = document.getElementById('url').value.trim();
+  const mp   = detectMp(url);
+  const badge = document.getElementById('url-badge');
+
+  if (!url) {
+    badge.className = 'url-badge badge-q';
+    badge.textContent = 'Вставь ссылку';
+    return;
+  }
+
+  if (mp) {
+    const labels = {wildberries:'🍇 WB', ozon:'🔵 Ozon', yandex_market:'🟡 ЯМ'};
+    const cls    = {wildberries:'badge-wb', ozon:'badge-oz', yandex_market:'badge-ym'};
+    badge.className = 'url-badge ' + cls[mp];
+    badge.textContent = labels[mp] + ' ✓';
+    setMp(mp);
+    // Авто-ID из URL
+    if (!pidManual) {
+      document.getElementById('pid').value = generateId(mp, url);
+    }
+  } else {
+    badge.className = 'url-badge badge-q';
+    badge.textContent = '? Неизвестно';
+  }
+}
+
+function generateId(mp, url) {
+  const prefix = {wildberries:'wb', ozon:'oz', yandex_market:'ym'}[mp] || 'p';
+  // Извлекаем числовой артикул из URL
+  const numMatch = url.match(/\/(\d{6,})[^/]*(?:\/|$)/);
+  if (numMatch) return prefix + '_' + numMatch[1];
+  // Fallback — случайный суффикс
+  return prefix + '_' + Date.now().toString(36);
+}
+
+// ── Выбор маркетплейса ─────────────────────────────────────
+function setMp(mp) {
+  selectedMp = mp;
+  ['wb','oz','ym'].forEach(k => {
+    document.getElementById('btn-'+k).className = 'mp-btn';
+  });
+  const map = {wildberries:'wb', ozon:'oz', yandex_market:'ym'};
+  if (map[mp]) {
+    document.getElementById('btn-'+map[mp]).className = 'mp-btn sel-'+map[mp];
+  }
+  document.getElementById('f-mp').classList.remove('err');
+}
+
+// ── Переключатель active ───────────────────────────────────
+document.getElementById('active').addEventListener('change', function() {
+  document.getElementById('active-label').textContent =
+    this.checked ? '✅ Активен (мониторится)' : '⏸️ Выключен (пропускается)';
+});
+
+// ── Валидация ──────────────────────────────────────────────
+function validate() {
+  let ok = true;
+
+  const url = document.getElementById('url').value.trim();
+  const fUrl = document.getElementById('f-url');
+  if (!url || !/^https?:\/\//.test(url)) {
+    fUrl.classList.add('err'); ok = false;
+  } else {
+    fUrl.classList.remove('err');
+  }
+
+  const fMp = document.getElementById('f-mp');
+  if (!selectedMp) {
+    fMp.classList.add('err'); ok = false;
+  } else {
+    fMp.classList.remove('err');
+  }
+
+  const name = document.getElementById('name').value.trim();
+  const fName = document.getElementById('f-name');
+  if (!name) {
+    fName.classList.add('err'); ok = false;
+  } else {
+    fName.classList.remove('err');
+  }
+
+  return ok;
+}
+
+// ── Генерация JSON ─────────────────────────────────────────
+function generate() {
+  if (!validate()) return;
+
+  const url       = document.getElementById('url').value.trim();
+  const name      = document.getElementById('name').value.trim();
+  const threshold = parseInt(document.getElementById('threshold').value);
+  const notes     = document.getElementById('notes').value.trim();
+  const active    = document.getElementById('active').checked;
+  let   pid       = document.getElementById('pid').value.trim();
+
+  if (!pid) {
+    pid = generateId(selectedMp, url);
+    document.getElementById('pid').value = pid;
+  }
+
+  const obj = {
+    id:              pid,
+    name:            name,
+    url:             url,
+    marketplace:     selectedMp,
+    alert_threshold: threshold,
+    active:          active,
+    notes:           notes,
+  };
+
+  // Рендер с подсветкой синтаксиса
+  const lines = [
+    `{`,
+    `  <span class="jk">"id"</span>: <span class="js">"${esc(obj.id)}"</span>,`,
+    `  <span class="jk">"name"</span>: <span class="js">"${esc(obj.name)}"</span>,`,
+    `  <span class="jk">"url"</span>: <span class="js">"${esc(obj.url)}"</span>,`,
+    `  <span class="jk">"marketplace"</span>: <span class="js">"${obj.marketplace}"</span>,`,
+    `  <span class="jk">"alert_threshold"</span>: <span class="jn">${obj.alert_threshold}</span>,`,
+    `  <span class="jk">"active"</span>: <span class="jb">${obj.active}</span>,`,
+    `  <span class="jk">"notes"</span>: <span class="js">"${esc(obj.notes)}"</span>`,
+    `}`,
+  ];
+
+  document.getElementById('json-out').innerHTML = lines.join('\n');
+  document.getElementById('output').classList.add('show');
+  document.getElementById('output').scrollIntoView({behavior:'smooth', block:'start'});
+
+  // Сохраняем в историю
+  const existing = history.findIndex(h => h.id === obj.id);
+  if (existing >= 0) history.splice(existing, 1);
+  history.unshift({...obj, _ts: Date.now()});
+  if (history.length > 20) history.pop();
+  localStorage.setItem('pm_gen_hist', JSON.stringify(history));
+  renderHistory();
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'\\"');
+}
+
+// ── Копирование ────────────────────────────────────────────
+function copyJson() {
+  // Берём чистый JSON из rendered текста
+  const url       = document.getElementById('url').value.trim();
+  const name      = document.getElementById('name').value.trim();
+  const threshold = parseInt(document.getElementById('threshold').value);
+  const notes     = document.getElementById('notes').value.trim();
+  const active    = document.getElementById('active').checked;
+  const pid       = document.getElementById('pid').value.trim();
+
+  const obj = {
+    id: pid, name, url, marketplace: selectedMp,
+    alert_threshold: threshold, active, notes
+  };
+
+  const text = JSON.stringify(obj, null, 2);
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = '✅ Скопировано!';
+    btn.classList.add('ok');
+    setTimeout(() => {
+      btn.textContent = '📋 Копировать';
+      btn.classList.remove('ok');
+    }, 2500);
+  });
+}
+
+// ── Сброс формы ───────────────────────────────────────────
+function resetForm() {
+  document.getElementById('url').value = '';
+  document.getElementById('name').value = '';
+  document.getElementById('pid').value = '';
+  document.getElementById('notes').value = '';
+  document.getElementById('threshold').value = 10;
+  document.getElementById('thr-val').textContent = '10%';
+  document.getElementById('active').checked = true;
+  document.getElementById('active-label').textContent = '✅ Активен (мониторится)';
+  document.getElementById('url-badge').className = 'url-badge badge-q';
+  document.getElementById('url-badge').textContent = 'Вставь ссылку';
+  selectedMp = '';
+  pidManual = false;
+  ['wb','oz','ym'].forEach(k => {
+    document.getElementById('btn-'+k).className = 'mp-btn';
+  });
+  ['f-url','f-mp','f-name'].forEach(id => {
+    document.getElementById(id).classList.remove('err');
+  });
+  document.getElementById('output').classList.remove('show');
+  window.scrollTo({top: 0, behavior:'smooth'});
+}
+
+// ── История ────────────────────────────────────────────────
+function renderHistory() {
+  const wrap  = document.getElementById('hist-wrap');
+  const items = document.getElementById('hist-items');
+  if (!history.length) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'block';
+  const mpColors = {wildberries:'#cb11ab', ozon:'#4d9fff', yandex_market:'#fc3f1d'};
+  const mpNames  = {wildberries:'WB', ozon:'Ozon', yandex_market:'ЯМ'};
+  items.innerHTML = history.map((h, i) => `
+    <div class="hist-item" onclick="loadFromHistory(${i})">
+      <div class="hist-mp-dot" style="background:${mpColors[h.marketplace]||'#888'}"></div>
+      <div class="hist-name">${h.name}</div>
+      <div class="hist-mp">${mpNames[h.marketplace]||h.marketplace} · ${h.alert_threshold}%</div>
+      <div class="hist-del" onclick="delHistory(event,${i})">✕</div>
+    </div>
+  `).join('');
+}
+
+function loadFromHistory(i) {
+  const h = history[i];
+  document.getElementById('url').value       = h.url;
+  document.getElementById('name').value      = h.name;
+  document.getElementById('pid').value       = h.id;
+  document.getElementById('notes').value     = h.notes || '';
+  document.getElementById('threshold').value = h.alert_threshold;
+  document.getElementById('thr-val').textContent = h.alert_threshold + '%';
+  document.getElementById('active').checked  = h.active !== false;
+  document.getElementById('active-label').textContent =
+    (h.active !== false) ? '✅ Активен (мониторится)' : '⏸️ Выключен (пропускается)';
+  pidManual = true;
+  onUrlInput();
+  setMp(h.marketplace);
+  document.getElementById('output').classList.remove('show');
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function delHistory(e, i) {
+  e.stopPropagation();
+  history.splice(i, 1);
+  localStorage.setItem('pm_gen_hist', JSON.stringify(history));
+  renderHistory();
+}
+</script>
+</body>
+</html>

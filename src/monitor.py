@@ -1,19 +1,33 @@
 """
-monitor.py — Главный скрипт мониторинга цен (версия с ScraperAPI)
-==================================================================
+monitor.py v4 — Главный скрипт мониторинга цен
+===============================================
 
-ЗАПУСКАЕТСЯ: GitHub Actions каждые 3 часа автоматически
+НОВАЯ ЛОГИКА ПЕРВОЙ ЦЕНЫ:
+  Проблема старой версии: при добавлении нового товара скрипт
+  просто сохранял цену и молчал. Пользователь не знал что товар
+  начал отслеживаться и какова стартовая цена.
 
-ЧТО ДЕЛАЕТ:
-  1. Проверяет баланс ScraperAPI (чтобы знать что ключ работает)
-  2. Читает список товаров из config/products.json
-  3. Для каждого товара:
-     а) Вызывает нужный парсер (WB/Ozon/ЯМ)
-     б) Сохраняет цену в SQLite базу данных
-     в) Сравнивает с предыдущей ценой
-     г) Если цена упала на threshold% — отправляет в Telegram
-  4. Генерирует HTML дашборд для GitHub Pages
-  5. Выводит итоговую статистику в лог
+  Новая логика:
+  ┌─────────────────────────────────────────────────────────┐
+  │ ПЕРВАЯ ПРОВЕРКА (товар ещё не был в БД):                │
+  │   1. Получить цену                                      │
+  │   2. Сохранить в БД как обычно                          │
+  │   3. Отправить в Telegram: «Новый товар, цена: X ₽»     │
+  │   4. ВСЕ будущие изменения считать от ЭТОЙ первой цены  │
+  └─────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────┐
+  │ ПОВТОРНЫЕ ПРОВЕРКИ (товар уже есть в БД):               │
+  │   1. Получить цену                                      │
+  │   2. Сохранить в БД                                     │
+  │   3. Сравнить с ПЕРВОЙ (базовой) ценой:                 │
+  │      - Если упала >= threshold% → алерт в Telegram      │
+  │      - В алерте показать и разницу от первой цены       │
+  └─────────────────────────────────────────────────────────┘
+
+  Почему сравниваем с ПЕРВОЙ ценой, а не с предыдущим замером?
+  - Предыдущий замер мог быть тем же числом (цена не менялась)
+  - При сравнении с первой ценой видно ПОЛНЫЙ масштаб скидки
+  - Пользователь понимает: «добавил за 8500, сейчас 6500 (-24%)»
 """
 
 import json
@@ -25,254 +39,276 @@ from typing import Dict, Any, Optional
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from database import init_db, save_price, get_last_price, save_alert, get_stats
-from notifier.telegram import send_price_drop_alert, send_message
+from database import (
+    init_db, save_price, save_alert, get_stats,
+    is_first_check, get_baseline_price,
+    get_previous_different_price, count_successful_checks
+)
+from notifier.telegram import (
+    send_new_product_alert, send_price_drop_alert, send_message
+)
 from parsers import wildberries, ozon, yandex_market
 from scraping_client import check_account_status, print_session_stats
 
 
 CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
-    "config", "products.json"
+    'config', 'products.json'
 )
 
 
 def load_config() -> Dict[str, Any]:
-    """Загружает конфигурацию из products.json."""
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
 def get_parser(marketplace: str):
-    """Возвращает модуль парсера по имени маркетплейса."""
-    mapping = {
-        "wildberries": wildberries,
-        "ozon":        ozon,
-        "yandex_market": yandex_market,
-        "ym":          yandex_market,
-    }
-    return mapping.get(marketplace.lower())
+    return {
+        'wildberries':   wildberries,
+        'ozon':          ozon,
+        'yandex_market': yandex_market,
+        'ym':            yandex_market,
+    }.get(marketplace.lower())
 
 
-def fmt(price: Optional[float]) -> str:
-    """Форматирует цену для вывода в лог."""
+def _fmt(price: Optional[float]) -> str:
     if price is None:
-        return "н/д"
-    return f"{price:>10,.0f} ₽".replace(",", " ")
+        return 'н/д'
+    return f'{price:,.0f} ₽'.replace(',', '\u202f')
 
 
-def get_previous_price(product_id: str, current_price: float) -> Optional[Dict]:
-    """
-    Возвращает ПРЕДЫДУЩУЮ цену товара (не текущую).
-
-    Логика: ищем последнюю успешную запись с ценой ОТЛИЧНОЙ от текущей.
-    Это нужно чтобы отслеживать реальное изменение, а не сравнивать
-    цену саму с собой.
-    """
-    from database import get_connection
-    conn = get_connection()
-    row = conn.execute("""
-        SELECT * FROM price_history
-        WHERE product_id = ?
-          AND price IS NOT NULL
-          AND ABS(price - ?) > 0.01
-        ORDER BY checked_at DESC
-        LIMIT 1
-    """, (product_id, current_price)).fetchone()
-    conn.close()
-    return dict(row) if row else None
-
+# ─────────────────────────────────────────────────────────────
+# ОБРАБОТКА ОДНОГО ТОВАРА
+# ─────────────────────────────────────────────────────────────
 
 def check_single_product(product: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Проверяет один товар: получает цену, сохраняет, проверяет алерт.
+    Полный цикл проверки одного товара.
 
-    ВОЗВРАЩАЕТ:
-      {
-        "success": True/False,
-        "alert_sent": True/False,
-        "price": float или None,
-        "change_percent": float или None,
-        "error": str или None
-      }
+    Шаги:
+      1. Определить — первая проверка или повторная
+      2. Получить цену через парсер
+      3. Сохранить в БД
+      4. Для первой проверки → уведомление «добавлен»
+         Для повторной      → сравнить с базовой ценой, алерт если нужно
+
+    Возвращает словарь с результатами для статистики.
     """
-    pid        = product["id"]
-    name       = product["name"]
-    url        = product["url"]
-    marketplace = product["marketplace"]
-    threshold  = product.get("alert_threshold", 10)
+    pid       = product['id']
+    name      = product['name']
+    url       = product['url']
+    mp        = product['marketplace']
+    threshold = float(product.get('alert_threshold', 10))
 
-    print(f"\n  📦 {name}")
-    print(f"     URL: {url[:65]}...")
-    print(f"     Маркетплейс: {marketplace} | Порог: {threshold}%")
+    print(f'\n  📦 {name}')
+    print(f'     URL: {url[:65]}')
+    print(f'     Маркетплейс: {mp} | Порог: {threshold}%')
 
-    # Выбираем парсер
-    parser = get_parser(marketplace)
+    # ── Шаг 1: Первая проверка или повторная? ────────────
+    first_time = is_first_check(pid)
+    if first_time:
+        print('     📌 ПЕРВАЯ ПРОВЕРКА — новый товар')
+    else:
+        checks = count_successful_checks(pid)
+        baseline = get_baseline_price(pid)
+        if baseline:
+            print(f'     📊 Проверок всего: {checks} | '
+                  f'Стартовая цена: {_fmt(baseline["price"])}')
+
+    # ── Шаг 2: Парсинг ───────────────────────────────────
+    parser = get_parser(mp)
     if not parser:
-        msg = f"Неизвестный маркетплейс: {marketplace}"
-        print(f"     ❌ {msg}")
-        save_price(pid, name, url, marketplace, None, False, msg)
-        return {"success": False, "error": msg}
+        msg = f'Неизвестный маркетплейс: {mp}'
+        print(f'     ❌ {msg}')
+        save_price(pid, name, url, mp, None, False, msg)
+        return {'success': False, 'is_new': False, 'alert_sent': False, 'error': msg}
 
-    # Запрашиваем цену
-    result = parser.fetch_price(url)
-    new_price = result.get("price")
-    in_stock  = result.get("in_stock", False)
-    error     = result.get("error")
+    result   = parser.fetch_price(url)
+    price    = result.get('price')
+    in_stock = result.get('in_stock', False)
+    error    = result.get('error')
 
-    # Обновляем имя если парсер нашёл более точное
-    if not name and result.get("name"):
-        name = result["name"]
+    # Если парсер нашёл более точное название — обновляем
+    parsed_name = result.get('name', '')
+    if parsed_name and not name:
+        name = parsed_name
 
-    print(f"     Цена:     {fmt(new_price)}")
-    print(f"     Наличие:  {'✅ Есть' if in_stock else '❌ Нет'}")
+    print(f'     Цена:    {_fmt(price)}')
+    print(f'     Наличие: {"✅ Есть" if in_stock else "❌ Нет/Неизвестно"}')
     if error:
-        print(f"     ⚠️  {error[:100]}")
+        print(f'     ⚠️  {error[:120]}')
 
-    # Сохраняем в БД
-    save_price(pid, name, url, marketplace, new_price, in_stock, error)
+    # ── Шаг 3: Сохраняем в БД ────────────────────────────
+    save_price(pid, name, url, mp, price, in_stock, error)
 
-    # Проверяем изменение цены
-    if new_price is not None:
-        prev_record = get_previous_price(pid, new_price)
+    # Если цену не получили — дальше нечего делать
+    if price is None:
+        return {'success': False, 'is_new': first_time,
+                'alert_sent': False, 'error': error}
 
-        if prev_record and prev_record.get("price"):
-            old_price = prev_record["price"]
-            pct_change = ((new_price - old_price) / old_price) * 100
+    # ── Шаг 4a: ПЕРВАЯ ПРОВЕРКА — уведомление «добавлен» ─
+    if first_time:
+        print(f'     🆕 Отправляем уведомление о новом товаре...')
+        sent = send_new_product_alert(
+            product_name=name,
+            marketplace=mp,
+            price=price,
+            url=url,
+            threshold=threshold,
+        )
+        if sent:
+            print('     ✅ Уведомление о новом товаре отправлено!')
+        # Сохраняем в алерты как событие добавления
+        save_alert(pid, old_price=price, new_price=price,
+                   change_percent=0.0, alert_type='new_product')
+        return {'success': True, 'is_new': True, 'alert_sent': True,
+                'price': price, 'change_percent': 0.0}
 
-            if pct_change < 0:
-                print(f"     📉 Изменение: {pct_change:+.1f}% "
-                      f"({fmt(old_price)} → {fmt(new_price)})")
+    # ── Шаг 4b: ПОВТОРНАЯ ПРОВЕРКА — сравниваем с базовой ─
+    baseline = get_baseline_price(pid)
 
-                # Проверяем достигнут ли порог
-                if abs(pct_change) >= threshold:
-                    print(f"     🚨 ПОРОГ СРАБОТАЛ! ({threshold}%) Отправляем уведомление...")
-                    save_alert(pid, old_price, new_price, pct_change)
+    if not baseline or baseline.get('price') is None:
+        # Нет базовой цены (теоретически не должно случиться)
+        print('     ⚠️  Базовая цена не найдена в БД')
+        return {'success': True, 'is_new': False, 'alert_sent': False, 'price': price}
 
-                    sent = send_price_drop_alert(
-                        product_name=name,
-                        marketplace=marketplace,
-                        old_price=old_price,
-                        new_price=new_price,
-                        change_percent=pct_change,
-                        url=url,
-                        threshold=threshold
-                    )
-                    if sent:
-                        print(f"     ✅ Telegram уведомление отправлено!")
-                    return {
-                        "success": True, "alert_sent": True,
-                        "price": new_price, "change_percent": pct_change
-                    }
+    base_price   = baseline['price']
+    pct_vs_base  = ((price - base_price) / base_price) * 100
 
-            elif pct_change > 0:
-                print(f"     📈 Цена выросла на {pct_change:.1f}%")
-            else:
-                print(f"     ➡️  Цена не изменилась")
+    # Для лога — также показываем изменение vs предыдущий замер
+    prev = get_previous_different_price(pid, price)
+    if prev and prev.get('price'):
+        pct_vs_prev = ((price - prev['price']) / prev['price']) * 100
+        print(f'     📊 Vs предыдущей:  {pct_vs_prev:+.1f}% '
+              f'({_fmt(prev["price"])} → {_fmt(price)})')
 
-        elif prev_record is None:
-            print(f"     📌 Первая запись для этого товара")
+    print(f'     📊 Vs стартовой:   {pct_vs_base:+.1f}% '
+          f'({_fmt(base_price)} → {_fmt(price)})')
 
-    return {
-        "success": new_price is not None,
-        "alert_sent": False,
-        "price": new_price,
-        "change_percent": None,
-        "error": error
-    }
+    # Алерт если снижение от базовой цены >= threshold
+    if pct_vs_base < 0 and abs(pct_vs_base) >= threshold:
+        print(f'     🚨 ПОРОГ СРАБОТАЛ! '
+              f'{abs(pct_vs_base):.1f}% >= {threshold}% — отправляем...')
 
+        # Для красивого уведомления: «было» = предыдущая цена
+        # «стало» = текущая цена, дополнительно — от стартовой
+        old_for_alert = prev['price'] if prev else base_price
+
+        save_alert(pid, old_price=old_for_alert, new_price=price,
+                   change_percent=pct_vs_base, alert_type='drop')
+
+        sent = send_price_drop_alert(
+            product_name=name,
+            marketplace=mp,
+            old_price=old_for_alert,
+            new_price=price,
+            change_percent=pct_vs_base,
+            url=url,
+            threshold=threshold,
+            baseline_price=base_price,
+        )
+        if sent:
+            print('     ✅ Алерт о снижении цены отправлен!')
+
+        return {'success': True, 'is_new': False, 'alert_sent': True,
+                'price': price, 'change_percent': pct_vs_base}
+
+    elif pct_vs_base > 0:
+        print(f'     📈 Цена выросла относительно стартовой')
+    else:
+        print(f'     ➡️  Цена на уровне стартовой или незначительно изменилась')
+
+    return {'success': True, 'is_new': False, 'alert_sent': False,
+            'price': price, 'change_percent': pct_vs_base}
+
+
+# ─────────────────────────────────────────────────────────────
+# ГЛАВНАЯ ФУНКЦИЯ
+# ─────────────────────────────────────────────────────────────
 
 def run_monitoring():
-    """
-    ТОЧКА ВХОДА — запускает полный цикл мониторинга.
-    Вызывается из GitHub Actions.
-    """
-    print("\n" + "═" * 65)
-    print("🚀 ЗАПУСК МОНИТОРИНГА ЦЕН")
-    print(f"⏰ {datetime.now().strftime('%d.%m.%Y %H:%M:%S')} UTC")
-    print("═" * 65)
+    print('\n' + '═' * 65)
+    print('🚀 ЗАПУСК МОНИТОРИНГА ЦЕН v4')
+    print(f'⏰ {datetime.utcnow().strftime("%d.%m.%Y %H:%M:%S")} UTC')
+    print('═' * 65)
 
-    # Инициализация БД
     init_db()
 
-    # ── Проверяем ScraperAPI ──────────────────────────────────
-    print("\n📡 Проверка ScraperAPI аккаунта...")
+    # ── Проверяем ScraperAPI ──────────────────────────────
+    print('\n📡 Проверка ScraperAPI...')
     api_status = check_account_status()
-
-    if not api_status["ok"]:
-        print(f"   ❌ Ошибка: {api_status['error']}")
-        print("   ⚠️  Проверьте SCRAPER_API_KEY в GitHub Secrets")
-        # Продолжаем — WB работает без ScraperAPI
+    if not api_status['ok']:
+        print(f'   ❌ {api_status["error"]}')
+        print('   ⚠️  Проверьте SCRAPER_API_KEY в GitHub Secrets')
     else:
-        left = api_status.get("requests_left", 0)
-        limit = api_status.get("requests_limit", 0)
-        print(f"   ✅ Аккаунт активен")
-        print(f"   📊 Запросов: использовано {api_status.get('requests_used', 0)}, "
-              f"осталось {left} из {limit}")
+        left  = api_status.get('requests_left', 0)
+        limit = api_status.get('requests_limit', 0)
+        print(f'   ✅ Активен | Использовано: {api_status.get("requests_used",0)} | '
+              f'Осталось: {left} из {limit}')
+        if left < 100:
+            send_message(f'⚠️ ScraperAPI: осталось мало запросов: {left}!')
 
-        # Предупреждение если запросов мало
-        if left < 50:
-            warn = f"⚠️ Осталось мало запросов ScraperAPI: {left}!"
-            print(f"   {warn}")
-            send_message(warn)
-
-    # ── Загружаем товары ──────────────────────────────────────
+    # ── Загружаем товары ──────────────────────────────────
     config   = load_config()
-    products = [p for p in config["products"] if p.get("active", True)]
-    print(f"\n📋 Товаров для проверки: {len(products)}")
+    products = [p for p in config['products'] if p.get('active', True)]
+    print(f'\n📋 Товаров к проверке: {len(products)}')
 
-    # ── Проверяем каждый товар ────────────────────────────────
-    stats = {"checked": 0, "ok": 0, "errors": 0, "alerts": 0}
+    stats = {'checked': 0, 'ok': 0, 'errors': 0,
+             'new_products': 0, 'alerts': 0}
 
     for i, product in enumerate(products, 1):
-        print(f"\n[{i}/{len(products)}]", end="")
-
+        print(f'\n[{i}/{len(products)}]', end='')
         try:
-            result = check_single_product(product)
-            stats["checked"] += 1
+            res = check_single_product(product)
+            stats['checked'] += 1
 
-            if result.get("success"):
-                stats["ok"] += 1
+            if res.get('success'):
+                stats['ok'] += 1
             else:
-                stats["errors"] += 1
+                stats['errors'] += 1
 
-            if result.get("alert_sent"):
-                stats["alerts"] += 1
+            if res.get('is_new'):
+                stats['new_products'] += 1
+
+            if res.get('alert_sent') and not res.get('is_new'):
+                stats['alerts'] += 1
 
         except Exception as exc:
-            stats["errors"] += 1
-            print(f"\n     💥 Критическая ошибка: {exc}")
+            stats['errors'] += 1
+            print(f'\n     💥 Критическая ошибка: {exc}')
             import traceback
             traceback.print_exc()
 
-        # Пауза между запросами — вежливо и даём ScraperAPI отдохнуть
+        # Пауза между товарами
         if i < len(products):
-            pause = 5 if product.get("marketplace") == "wildberries" else 15
-            print(f"     💤 Пауза {pause}с перед следующим товаром...")
+            pause = 5 if product.get('marketplace') == 'wildberries' else 15
+            print(f'     💤 Пауза {pause}с...')
             time.sleep(pause)
 
-    # ── Генерируем дашборд ────────────────────────────────────
-    print("\n📊 Генерация дашборда...")
+    # ── Дашборд ───────────────────────────────────────────
+    print('\n📊 Генерация дашборда...')
     try:
         from dashboard_generator import generate_dashboard
         generate_dashboard()
-        print("   ✅ Дашборд обновлён")
+        print('   ✅ Дашборд обновлён')
     except Exception as e:
-        print(f"   ⚠️  Ошибка генерации дашборда: {e}")
+        print(f'   ⚠️  Ошибка дашборда: {e}')
 
-    # ── Итоговая статистика ───────────────────────────────────
+    # ── Статистика ScraperAPI ─────────────────────────────
     print_session_stats()
 
-    print("\n" + "═" * 65)
-    print("📈 ИТОГИ СЕССИИ:")
-    print(f"   ✅ Проверено:  {stats['checked']} товаров")
-    print(f"   ✅ Успешно:    {stats['ok']}")
-    print(f"   ❌ Ошибок:     {stats['errors']}")
-    print(f"   🚨 Алертов:    {stats['alerts']}")
-    print("═" * 65 + "\n")
+    # ── Итоги ─────────────────────────────────────────────
+    print('\n' + '═' * 65)
+    print('📈 ИТОГИ:')
+    print(f'   ✅ Проверено:    {stats["checked"]}')
+    print(f'   ✅ Успешно:      {stats["ok"]}')
+    print(f'   ❌ Ошибок:       {stats["errors"]}')
+    print(f'   🆕 Новых:        {stats["new_products"]}')
+    print(f'   🚨 Алертов:      {stats["alerts"]}')
+    print('═' * 65 + '\n')
 
     return stats
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     run_monitoring()
