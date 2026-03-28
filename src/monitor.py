@@ -1,33 +1,20 @@
 """
-monitor.py v4 — Главный скрипт мониторинга цен
-===============================================
+monitor.py  v5  — Главный скрипт мониторинга цен
+=================================================
 
-НОВАЯ ЛОГИКА ПЕРВОЙ ЦЕНЫ:
-  Проблема старой версии: при добавлении нового товара скрипт
-  просто сохранял цену и молчал. Пользователь не знал что товар
-  начал отслеживаться и какова стартовая цена.
+ИСПРАВЛЕНИЯ v5:
+  1. Добавлен send_run_summary() — теперь Telegram получает итог КАЖДОГО
+     запуска, даже если цены не менялись. Раньше молчание = непонятно
+     работает ли вообще.
 
-  Новая логика:
-  ┌─────────────────────────────────────────────────────────┐
-  │ ПЕРВАЯ ПРОВЕРКА (товар ещё не был в БД):                │
-  │   1. Получить цену                                      │
-  │   2. Сохранить в БД как обычно                          │
-  │   3. Отправить в Telegram: «Новый товар, цена: X ₽»     │
-  │   4. ВСЕ будущие изменения считать от ЭТОЙ первой цены  │
-  └─────────────────────────────────────────────────────────┘
-  ┌─────────────────────────────────────────────────────────┐
-  │ ПОВТОРНЫЕ ПРОВЕРКИ (товар уже есть в БД):               │
-  │   1. Получить цену                                      │
-  │   2. Сохранить в БД                                     │
-  │   3. Сравнить с ПЕРВОЙ (базовой) ценой:                 │
-  │      - Если упала >= threshold% → алерт в Telegram      │
-  │      - В алерте показать и разницу от первой цены       │
-  └─────────────────────────────────────────────────────────┘
+  2. Результаты всех товаров собираются в products_results[]
+     и передаются в send_run_summary().
 
-  Почему сравниваем с ПЕРВОЙ ценой, а не с предыдущим замером?
-  - Предыдущий замер мог быть тем же числом (цена не менялась)
-  - При сравнении с первой ценой видно ПОЛНЫЙ масштаб скидки
-  - Пользователь понимает: «добавил за 8500, сейчас 6500 (-24%)»
+  3. Импорт send_run_summary из notifier.telegram.
+
+ЛОГИКА ПЕРВОЙ ЦЕНЫ (из v4, без изменений):
+  Первая проверка → уведомление «Новый товар, стартовая цена X ₽».
+  Повторные → сравнение с baseline (первой) ценой → алерт при падении.
 """
 
 import json
@@ -35,17 +22,18 @@ import os
 import sys
 import time
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from database import (
-    init_db, save_price, save_alert, get_stats,
+    init_db, save_price, save_alert,
     is_first_check, get_baseline_price,
-    get_previous_different_price, count_successful_checks
+    get_previous_different_price, count_successful_checks,
 )
 from notifier.telegram import (
-    send_new_product_alert, send_price_drop_alert, send_message
+    send_new_product_alert, send_price_drop_alert,
+    send_run_summary, send_message,
 )
 from parsers import wildberries, ozon, yandex_market
 from scraping_client import check_account_status, print_session_stats
@@ -84,157 +72,150 @@ def _fmt(price: Optional[float]) -> str:
 def check_single_product(product: Dict[str, Any]) -> Dict[str, Any]:
     """
     Полный цикл проверки одного товара.
-
-    Шаги:
-      1. Определить — первая проверка или повторная
-      2. Получить цену через парсер
-      3. Сохранить в БД
-      4. Для первой проверки → уведомление «добавлен»
-         Для повторной      → сравнить с базовой ценой, алерт если нужно
-
-    Возвращает словарь с результатами для статистики.
+    Возвращает словарь с результатами для статистики и итогового отчёта.
     """
     pid       = product['id']
-    name      = product['name']
+    name      = product.get('name', '')
     url       = product['url']
     mp        = product['marketplace']
     threshold = float(product.get('alert_threshold', 10))
 
     print(f'\n  📦 {name}')
-    print(f'     URL: {url[:65]}')
+    print(f'     URL: {url[:70]}')
     print(f'     Маркетплейс: {mp} | Порог: {threshold}%')
 
-    # ── Шаг 1: Первая проверка или повторная? ────────────
+    # Первая или повторная проверка?
     first_time = is_first_check(pid)
     if first_time:
         print('     📌 ПЕРВАЯ ПРОВЕРКА — новый товар')
     else:
-        checks = count_successful_checks(pid)
+        checks   = count_successful_checks(pid)
         baseline = get_baseline_price(pid)
         if baseline:
-            print(f'     📊 Проверок всего: {checks} | '
+            print(f'     📊 Проверок: {checks} | '
                   f'Стартовая цена: {_fmt(baseline["price"])}')
 
-    # ── Шаг 2: Парсинг ───────────────────────────────────
+    # Парсинг
     parser = get_parser(mp)
     if not parser:
         msg = f'Неизвестный маркетплейс: {mp}'
         print(f'     ❌ {msg}')
         save_price(pid, name, url, mp, None, False, msg)
-        return {'success': False, 'is_new': False, 'alert_sent': False, 'error': msg}
+        return {
+            'success': False, 'is_new': False, 'alert_sent': False,
+            'error': msg, 'name': name, 'price': None,
+            'change_percent': None, 'url': url, 'marketplace': mp,
+        }
 
     result   = parser.fetch_price(url)
     price    = result.get('price')
     in_stock = result.get('in_stock', False)
     error    = result.get('error')
 
-    # Если парсер нашёл более точное название — обновляем
+    # Обновляем имя если парсер нашёл лучшее
     parsed_name = result.get('name', '')
     if parsed_name and not name:
         name = parsed_name
 
     print(f'     Цена:    {_fmt(price)}')
-    print(f'     Наличие: {"✅ Есть" if in_stock else "❌ Нет/Неизвестно"}')
+    print(f'     Наличие: {"✅ Есть" if in_stock else "❌ Нет"}')
     if error:
         print(f'     ⚠️  {error[:120]}')
 
-    # ── Шаг 3: Сохраняем в БД ────────────────────────────
+    # Сохраняем в БД
     save_price(pid, name, url, mp, price, in_stock, error)
 
-    # Если цену не получили — дальше нечего делать
     if price is None:
-        return {'success': False, 'is_new': first_time,
-                'alert_sent': False, 'error': error}
+        return {
+            'success': False, 'is_new': first_time, 'alert_sent': False,
+            'error': error, 'name': name, 'price': None,
+            'change_percent': None, 'url': url, 'marketplace': mp,
+        }
 
-    # ── Шаг 4a: ПЕРВАЯ ПРОВЕРКА — уведомление «добавлен» ─
+    # ── ПЕРВАЯ ПРОВЕРКА: уведомление «добавлен» ──────────────
     if first_time:
-        print(f'     🆕 Отправляем уведомление о новом товаре...')
+        print('     🆕 Отправляем уведомление о новом товаре...')
         sent = send_new_product_alert(
-            product_name=name,
-            marketplace=mp,
-            price=price,
-            url=url,
-            threshold=threshold,
+            product_name=name, marketplace=mp,
+            price=price, url=url, threshold=threshold,
         )
         if sent:
             print('     ✅ Уведомление о новом товаре отправлено!')
-        # Сохраняем в алерты как событие добавления
         save_alert(pid, old_price=price, new_price=price,
                    change_percent=0.0, alert_type='new_product')
-        return {'success': True, 'is_new': True, 'alert_sent': True,
-                'price': price, 'change_percent': 0.0}
+        return {
+            'success': True, 'is_new': True, 'alert_sent': True,
+            'price': price, 'change_percent': 0.0,
+            'error': None, 'name': name, 'url': url, 'marketplace': mp,
+        }
 
-    # ── Шаг 4b: ПОВТОРНАЯ ПРОВЕРКА — сравниваем с базовой ─
+    # ── ПОВТОРНАЯ ПРОВЕРКА: сравниваем с базовой ─────────────
     baseline = get_baseline_price(pid)
-
     if not baseline or baseline.get('price') is None:
-        # Нет базовой цены (теоретически не должно случиться)
         print('     ⚠️  Базовая цена не найдена в БД')
-        return {'success': True, 'is_new': False, 'alert_sent': False, 'price': price}
+        return {
+            'success': True, 'is_new': False, 'alert_sent': False,
+            'price': price, 'change_percent': None,
+            'error': None, 'name': name, 'url': url, 'marketplace': mp,
+        }
 
-    base_price   = baseline['price']
-    pct_vs_base  = ((price - base_price) / base_price) * 100
+    base_price  = baseline['price']
+    pct_vs_base = ((price - base_price) / base_price) * 100
 
-    # Для лога — также показываем изменение vs предыдущий замер
+    # Для лога — изменение vs предыдущий замер
     prev = get_previous_different_price(pid, price)
     if prev and prev.get('price'):
-        pct_vs_prev = ((price - prev['price']) / prev['price']) * 100
-        print(f'     📊 Vs предыдущей:  {pct_vs_prev:+.1f}% '
+        pct_prev = ((price - prev['price']) / prev['price']) * 100
+        print(f'     📊 Vs предыдущей:  {pct_prev:+.1f}% '
               f'({_fmt(prev["price"])} → {_fmt(price)})')
 
     print(f'     📊 Vs стартовой:   {pct_vs_base:+.1f}% '
           f'({_fmt(base_price)} → {_fmt(price)})')
 
-    # Алерт если снижение от базовой цены >= threshold
+    # Алерт если снижение от базовой >= threshold
+    alert_sent = False
     if pct_vs_base < 0 and abs(pct_vs_base) >= threshold:
-        print(f'     🚨 ПОРОГ СРАБОТАЛ! '
-              f'{abs(pct_vs_base):.1f}% >= {threshold}% — отправляем...')
+        print(f'     🚨 ПОРОГ! {abs(pct_vs_base):.1f}% >= {threshold}% — алерт...')
 
-        # Для красивого уведомления: «было» = предыдущая цена
-        # «стало» = текущая цена, дополнительно — от стартовой
         old_for_alert = prev['price'] if prev else base_price
-
         save_alert(pid, old_price=old_for_alert, new_price=price,
                    change_percent=pct_vs_base, alert_type='drop')
 
         sent = send_price_drop_alert(
-            product_name=name,
-            marketplace=mp,
-            old_price=old_for_alert,
-            new_price=price,
-            change_percent=pct_vs_base,
-            url=url,
-            threshold=threshold,
-            baseline_price=base_price,
+            product_name=name, marketplace=mp,
+            old_price=old_for_alert, new_price=price,
+            change_percent=pct_vs_base, url=url,
+            threshold=threshold, baseline_price=base_price,
         )
         if sent:
-            print('     ✅ Алерт о снижении цены отправлен!')
-
-        return {'success': True, 'is_new': False, 'alert_sent': True,
-                'price': price, 'change_percent': pct_vs_base}
+            print('     ✅ Алерт отправлен!')
+        alert_sent = True
 
     elif pct_vs_base > 0:
-        print(f'     📈 Цена выросла относительно стартовой')
+        print('     📈 Цена выросла относительно стартовой')
     else:
-        print(f'     ➡️  Цена на уровне стартовой или незначительно изменилась')
+        print('     ➡️  Цена без значительных изменений')
 
-    return {'success': True, 'is_new': False, 'alert_sent': False,
-            'price': price, 'change_percent': pct_vs_base}
+    return {
+        'success': True, 'is_new': False, 'alert_sent': alert_sent,
+        'price': price, 'change_percent': pct_vs_base,
+        'error': error, 'name': name, 'url': url, 'marketplace': mp,
+    }
 
 
 # ─────────────────────────────────────────────────────────────
-# ГЛАВНАЯ ФУНКЦИЯ
+# ТОЧКА ВХОДА
 # ─────────────────────────────────────────────────────────────
 
 def run_monitoring():
     print('\n' + '═' * 65)
-    print('🚀 ЗАПУСК МОНИТОРИНГА ЦЕН v4')
+    print('🚀 ЗАПУСК МОНИТОРИНГА ЦЕН v5')
     print(f'⏰ {datetime.utcnow().strftime("%d.%m.%Y %H:%M:%S")} UTC')
     print('═' * 65)
 
     init_db()
 
-    # ── Проверяем ScraperAPI ──────────────────────────────
+    # ── ScraperAPI ────────────────────────────────────────────
     print('\n📡 Проверка ScraperAPI...')
     api_status = check_account_status()
     if not api_status['ok']:
@@ -243,19 +224,24 @@ def run_monitoring():
     else:
         left  = api_status.get('requests_left', 0)
         limit = api_status.get('requests_limit', 0)
-        print(f'   ✅ Активен | Использовано: {api_status.get("requests_used",0)} | '
+        print(f'   ✅ Активен | Использовано: {api_status.get("requests_used", 0)} | '
               f'Осталось: {left} из {limit}')
         if left < 100:
-            send_message(f'⚠️ ScraperAPI: осталось мало запросов: {left}!')
+            send_message(f'⚠️ ScraperAPI: мало запросов! Осталось: {left} из {limit}')
 
-    # ── Загружаем товары ──────────────────────────────────
+    # ── Загрузка товаров ──────────────────────────────────────
     config   = load_config()
     products = [p for p in config['products'] if p.get('active', True)]
     print(f'\n📋 Товаров к проверке: {len(products)}')
 
-    stats = {'checked': 0, 'ok': 0, 'errors': 0,
-             'new_products': 0, 'alerts': 0}
+    stats: Dict[str, int] = {
+        'checked': 0, 'ok': 0, 'errors': 0,
+        'alerts': 0, 'new': 0,
+    }
+    # Список результатов для итогового Telegram-отчёта
+    products_results: List[Dict[str, Any]] = []
 
+    # ── Цикл по товарам ───────────────────────────────────────
     for i, product in enumerate(products, 1):
         print(f'\n[{i}/{len(products)}]', end='')
         try:
@@ -268,16 +254,33 @@ def run_monitoring():
                 stats['errors'] += 1
 
             if res.get('is_new'):
-                stats['new_products'] += 1
-
+                stats['new'] += 1
             if res.get('alert_sent') and not res.get('is_new'):
                 stats['alerts'] += 1
+
+            # Сохраняем для итогового отчёта
+            products_results.append({
+                'name':           res.get('name', product.get('name', '?')),
+                'marketplace':    product.get('marketplace', ''),
+                'price':          res.get('price'),
+                'change_percent': res.get('change_percent'),
+                'error':          res.get('error'),
+                'url':            product.get('url', ''),
+            })
 
         except Exception as exc:
             stats['errors'] += 1
             print(f'\n     💥 Критическая ошибка: {exc}')
             import traceback
             traceback.print_exc()
+            products_results.append({
+                'name':           product.get('name', '?'),
+                'marketplace':    product.get('marketplace', ''),
+                'price':          None,
+                'change_percent': None,
+                'error':          str(exc),
+                'url':            product.get('url', ''),
+            })
 
         # Пауза между товарами
         if i < len(products):
@@ -285,7 +288,7 @@ def run_monitoring():
             print(f'     💤 Пауза {pause}с...')
             time.sleep(pause)
 
-    # ── Дашборд ───────────────────────────────────────────
+    # ── Дашборд ───────────────────────────────────────────────
     print('\n📊 Генерация дашборда...')
     try:
         from dashboard_generator import generate_dashboard
@@ -294,17 +297,30 @@ def run_monitoring():
     except Exception as e:
         print(f'   ⚠️  Ошибка дашборда: {e}')
 
-    # ── Статистика ScraperAPI ─────────────────────────────
+    # ── Итоговый отчёт в Telegram ─────────────────────────────
+    # ИСПРАВЛЕНИЕ v5: этого не было в v4 — теперь всегда шлём итог
+    print('\n📬 Отправляем итоговый отчёт в Telegram...')
+    try:
+        sent = send_run_summary(products_results, stats)
+        if sent:
+            print('   ✅ Итоговый отчёт отправлен')
+        else:
+            print('   ⚠️  Итоговый отчёт не отправлен')
+            print('   → Проверьте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в Secrets')
+    except Exception as e:
+        print(f'   ⚠️  Ошибка отправки отчёта: {e}')
+
+    # ── Статистика ScraperAPI ─────────────────────────────────
     print_session_stats()
 
-    # ── Итоги ─────────────────────────────────────────────
+    # ── Консольный итог ───────────────────────────────────────
     print('\n' + '═' * 65)
     print('📈 ИТОГИ:')
-    print(f'   ✅ Проверено:    {stats["checked"]}')
-    print(f'   ✅ Успешно:      {stats["ok"]}')
-    print(f'   ❌ Ошибок:       {stats["errors"]}')
-    print(f'   🆕 Новых:        {stats["new_products"]}')
-    print(f'   🚨 Алертов:      {stats["alerts"]}')
+    print(f'   ✅ Проверено:  {stats["checked"]}')
+    print(f'   ✅ Успешно:    {stats["ok"]}')
+    print(f'   ❌ Ошибок:     {stats["errors"]}')
+    print(f'   🆕 Новых:      {stats["new"]}')
+    print(f'   🚨 Алертов:    {stats["alerts"]}')
     print('═' * 65 + '\n')
 
     return stats
