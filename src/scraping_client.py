@@ -70,32 +70,26 @@ def scrape_url(
     timeout: int = 60,
     session_number: Optional[int] = None,
     ultra_premium: bool = False,
+    wait_ms: int = 0,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Получает HTML страницы через ScraperAPI.
 
     ПАРАМЕТРЫ:
-      url           — URL страницы которую хотим получить (Ozon, ЯМ и т.д.)
-      render_js     — True = рендерить JavaScript (нужно для Ozon, ЯМ)
-                      False = просто HTML без JS (быстрее, для простых сайтов)
-      country_code  — код страны для прокси ("ru" = Россия, обязательно!)
-      retry_count   — сколько раз повторить при ошибке (по умолчанию 3)
+      url           — URL страницы которую хотим получить
+      render_js     — True = рендерить JavaScript
+      country_code  — код страны для прокси ("ru" = Россия)
+      retry_count   — сколько раз повторить при ошибке
       retry_delay   — пауза между попытками в секундах
-      timeout       — максимальное время ожидания ответа (60 сек для JS-рендера)
-      session_number — номер сессии (один IP на всю сессию, для связанных запросов)
-      ultra_premium — True = использовать Ultra Premium прокси (резидентные)
+      timeout       — максимальное время ожидания ответа
+      session_number — номер сессии (один IP на всю сессию)
+      ultra_premium — True = резидентные прокси (лучше для ЯМ/Ozon)
+      wait_ms       — ждать N миллисекунд после загрузки страницы
+                      (помогает дождаться выполнения JS, например 5000 = 5 сек)
 
     ВОЗВРАЩАЕТ:
-      (html_text, None)        — если успешно, html_text это HTML страницы
-      (None, error_message)    — если ошибка, error_message описывает проблему
-
-    ПРИМЕРЫ ИСПОЛЬЗОВАНИЯ:
-      html, err = scrape_url("https://www.ozon.ru/product/...")
-      if err:
-          print(f"Ошибка: {err}")
-      else:
-          # Парсим html
-          soup = BeautifulSoup(html, "lxml")
+      (html_text, None)      — если успешно
+      (None, error_message)  — если ошибка
     """
     global _requests_used, _requests_failed
 
@@ -117,6 +111,10 @@ def scrape_url(
     # JavaScript рендеринг (нужен для Ozon и Яндекс.Маркет)
     if render_js:
         params["render"] = "true"
+
+    # Ждём N мс после загрузки страницы (для сайтов с долгим JS)
+    if wait_ms > 0:
+        params["wait"] = str(wait_ms)
 
     # Premium прокси — лучше обходят защиту, расходуют 10 кредитов вместо 1
     if is_premium() or ultra_premium:

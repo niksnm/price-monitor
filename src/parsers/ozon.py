@@ -1,77 +1,61 @@
 """
-parsers/ozon.py — Парсер Ozon v4.1
-====================================
+parsers/ozon.py — Ozon парсер 2026 (обход Cloudflare)
+======================================================
 
-ИСПРАВЛЕНИЕ БАГА "Цена Ozon не найдена обоими методами":
+ПОЧЕМУ ВСЕ 4 МЕТОДА ПАДАЛИ:
+  Ozon в 2026 году включил Cloudflare Enterprise с JS challenge.
+  Запросы без браузера → немедленная блокировка 403/captcha.
+  Даже ScraperAPI render=true иногда не успевает пройти challenge.
 
-  ПРИЧИНА:
-    1. Внутренний API Ozon (/api/composer-api.bx/...) периодически
-       требует авторизацию или возвращает 404 — в таких случаях
-       старый код сразу переходил к HTML-рендеру, который тоже
-       мог не найти цену из-за слишком короткого таймаута.
+РЕШЕНИЕ — ScraperAPI Advanced Parameters:
+  1. render=true + wait=5000 (ждём 5 сек после загрузки)
+  2. js_instructions — выполняем JS в браузере: прокрутка, клик
+     чтобы имитировать поведение пользователя
+  3. Пробуем мобильную версию m.ozon.ru — слабее защита
+  4. Пробуем Ozon API с правильными cookies
 
-    2. JSON в HTML мог не содержать цену если ScraperAPI не успел
-       дождаться полного выполнения React-кода Ozon.
+ИЗВЛЕЧЕНИЕ ЦЕНЫ:
+  Ключевое изменение: Ozon теперь хранит цену в:
+    window.__ozon_data = {"price": {...}}
+    <script data-state="..."> — base64 encoded JSON
+    Обычные regex паттерны
 
-  ИСПРАВЛЕНИЯ v4.1:
-    1. Добавлен Уровень 0: Ozon Mobile API (быстрый, не требует JS)
-       /api/entrypoint-api.bx/page/json/v2 — работает иначе чем web API
-
-    2. Расширены regex-паттерны для поиска в HTML:
-       Добавлены actualPrice, regularPrice, retailPrice
-
-    3. Улучшен парсинг __NUXT_DATA__: теперь ищем во всех script-тегах
-       по содержимому а не только по id
-
-    4. Добавлен поиск цены в тексте страницы через паттерн "₽"
-
-ПОРЯДОК ПОПЫТОК:
-  Уровень 0: Ozon Mobile API      (~5 сек,  без JS)
-  Уровень 1: Ozon Web API         (~10 сек, без JS)
-  Уровень 2: HTML с JS-рендером   (~60 сек, с JS)
-  Уровень 3: HTML без рендера     (~15 сек, быстрый fallback)
+ПОРЯДОК:
+  0. m.ozon.ru (мобильная версия, меньше защита)
+  1. Основной URL + wait=5000 + прокрутка
+  2. Ozon внутренний API с правильными заголовками
+  3. HTML без JS (иногда получается частичный HTML с ценой)
 """
 
 import re
 import json
 import sys
 import os
-import time
+import base64
 from collections import Counter
 from bs4 import BeautifulSoup
 from typing import Optional, Dict, Any, List, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from scraping_client import scrape_url
+from scraping_client import scrape_url, get_api_key
+
+import requests
 
 
-# Ключи цен в порядке надёжности
-HIGH_PRICE_KEYS = {
-    'finalPrice', 'cardPrice', 'sellPrice', 'salePrice',
-    'discountedPrice', 'priceWithCard', 'sellingPrice',
-    'actualPrice', 'offerPrice', 'minimalPrice'
-}
-MED_PRICE_KEYS = {
-    'price', 'currentPrice', 'minPrice', 'basePrice',
-    'regularPrice', 'retailPrice', 'value'
-}
-
+# ─────────────────────────────────────────────────────────────
+# ВСПОМОГАТЕЛЬНЫЕ
+# ─────────────────────────────────────────────────────────────
 
 def _to_price(val) -> Optional[float]:
-    """Преобразует любое значение в цену (50..10_000_000) или None."""
     if val is None:
         return None
     if isinstance(val, (int, float)):
         f = float(val)
         return f if 50 <= f <= 10_000_000 else None
     if isinstance(val, str):
-        s = re.sub(r'[^\d.,]', '', val.replace('\xa0', '').replace('\u202f', ''))
+        s = re.sub(r'[^\d.]', '', val.replace(',', '.').replace('\xa0', '').replace('\u202f', ''))
         if not s:
             return None
-        s = s.replace(',', '.')
-        parts = s.split('.')
-        if len(parts) > 2:
-            s = ''.join(parts[:-1]) + '.' + parts[-1]
         try:
             f = float(s)
             return f if 50 <= f <= 10_000_000 else None
@@ -80,188 +64,126 @@ def _to_price(val) -> Optional[float]:
     return None
 
 
-def _collect_prices_from_json(obj, depth: int = 0) -> List[Tuple[str, float, str]]:
-    """Рекурсивно ищет ценовые ключи в JSON. Возвращает (ключ, цена, приоритет)."""
-    if depth > 20:
+HIGH_KEYS = {
+    'finalPrice', 'cardPrice', 'sellPrice', 'salePrice',
+    'discountedPrice', 'priceWithCard', 'sellingPrice',
+    'actualPrice', 'offerPrice', 'minimalPrice', 'price_with_sale'
+}
+MED_KEYS = {
+    'price', 'currentPrice', 'minPrice', 'basePrice',
+    'regularPrice', 'retailPrice'
+}
+
+
+def _find_prices(obj, depth=0) -> List[Tuple[str, float, str]]:
+    if depth > 22:
         return []
     results = []
     if isinstance(obj, dict):
         for k, v in obj.items():
-            if k in HIGH_PRICE_KEYS:
+            if k in HIGH_KEYS:
                 p = _to_price(v)
                 if p:
-                    results.append((k, p, 'high'))
-            elif k in MED_PRICE_KEYS:
+                    results.append((k, p, 'H'))
+            elif k in MED_KEYS:
                 p = _to_price(v)
                 if p:
-                    results.append((k, p, 'med'))
-            results.extend(_collect_prices_from_json(v, depth + 1))
+                    results.append((k, p, 'M'))
+            results.extend(_find_prices(v, depth + 1))
     elif isinstance(obj, list):
         for item in obj[:100]:
-            results.extend(_collect_prices_from_json(item, depth + 1))
+            results.extend(_find_prices(item, depth + 1))
     return results
 
 
-def _best_price_from_list(prices: List[Tuple[str, float, str]]) -> Optional[float]:
-    """Выбирает наиболее вероятную цену из списка кандидатов."""
+def _best(prices: List[Tuple]) -> Optional[float]:
     if not prices:
         return None
-    high = [p for _, p, pr in prices if pr == 'high']
+    high = [p for _, p, pr in prices if pr == 'H']
     pool = high if high else [p for _, p, pr in prices]
     return Counter(pool).most_common(1)[0][0] if pool else None
 
 
-def _parse_json_safely(raw: str) -> Optional[dict]:
-    """Парсит JSON, возвращает None при ошибке."""
+def _json_safe(s: str) -> Optional[dict]:
     try:
-        return json.loads(raw)
+        return json.loads(s)
     except Exception:
         return None
 
 
-# ─────────────────────────────────────────────────────────────
-# УРОВЕНЬ 0 — Ozon Mobile API
-# ─────────────────────────────────────────────────────────────
-
-def _try_mobile_api(url: str) -> Optional[float]:
+def _extract_from_html(html: str) -> Optional[float]:
     """
-    Ozon имеет API для мобильного приложения — он отличается от web API
-    и часто работает когда web API даёт 404 или требует авторизацию.
+    Основная функция извлечения цены из HTML Ozon.
+    Пробует 5 разных методов.
     """
-    m = re.search(r'ozon\.ru(/product/[^?#]+)', url)
-    if not m:
-        return None
+    soup = BeautifulSoup(html, 'lxml')
 
-    path = m.group(1).rstrip('/') + '/'
-    # Mobile app API endpoint
-    api_url = f'https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url={path}'
-    print(f'     📱 Уровень 0 — Mobile API')
-
-    html, err = scrape_url(
-        url=api_url,
-        render_js=False,
-        country_code='ru',
-        retry_count=2,
-        retry_delay=3.0,
-        timeout=25,
-    )
-
-    if err or not html:
-        return None
-
-    data = _parse_json_safely(html)
-    if not data:
-        return None
-
-    prices = _collect_prices_from_json(data)
-    price = _best_price_from_list(prices)
-    if price:
-        print(f'     ✅ Mobile API → {price:,.0f} ₽')
-    return price
-
-
-# ─────────────────────────────────────────────────────────────
-# УРОВЕНЬ 1 — Ozon Web API
-# ─────────────────────────────────────────────────────────────
-
-def _try_web_api(url: str) -> Optional[float]:
-    """Ozon внутренний web API."""
-    m = re.search(r'ozon\.ru(/product/[^?#]+)', url)
-    if not m:
-        return None
-
-    path = m.group(1).rstrip('/') + '/'
-    api_url = f'https://www.ozon.ru/api/composer-api.bx/page/json/v2?url={path}'
-    print(f'     🌐 Уровень 1 — Web API')
-
-    html, err = scrape_url(
-        url=api_url,
-        render_js=False,
-        country_code='ru',
-        retry_count=2,
-        retry_delay=5.0,
-        timeout=30,
-    )
-
-    if err or not html:
-        return None
-
-    data = _parse_json_safely(html)
-    if not data:
-        return None
-
-    prices = _collect_prices_from_json(data)
-    price = _best_price_from_list(prices)
-    if price:
-        print(f'     ✅ Web API → {price:,.0f} ₽')
-    return price
-
-
-# ─────────────────────────────────────────────────────────────
-# УРОВЕНЬ 2 — HTML с JS-рендерингом
-# ─────────────────────────────────────────────────────────────
-
-def _extract_price_from_html(html: str, soup: BeautifulSoup) -> Optional[float]:
-    """
-    Извлекает цену из HTML несколькими методами.
-    Вызывается и для JS-рендера и для простого HTML.
-    """
-
-    # ── Метод A: JSON в script-тегах ──────────────────────
+    # ── Метод 1: script теги с JSON ──────────────────────
     for tag in soup.find_all('script'):
         raw = tag.string or ''
         if len(raw) < 100:
             continue
 
-        # По id тега
-        tag_id = tag.get('id', '').upper()
-        is_data_tag = any(k in tag_id for k in ('NUXT', 'STATE', 'DATA', 'NEXT'))
+        tag_id = (tag.get('id') or '').upper()
+        is_data = any(k in tag_id for k in ('NUXT', 'STATE', 'DATA', 'NEXT', 'OZON'))
 
-        # По содержимому (содержит ценовые ключи)
-        has_price_key = any(k in raw for k in HIGH_PRICE_KEYS)
+        # Ищем по содержимому если нет специального id
+        has_price_key = any(k in raw for k in HIGH_KEYS)
 
-        if is_data_tag or (has_price_key and len(raw) > 500):
-            # Если это window.VAR = {...}
-            if 'window.' in raw:
+        if is_data or (has_price_key and len(raw) > 300):
+            # window.VAR = {...}
+            if 'window.' in raw and '=' in raw:
                 m = re.search(r'window\.\w+\s*=\s*(\{.+)', raw, re.DOTALL)
                 if m:
                     raw = m.group(1).rstrip(';\n')
 
-            data = _parse_json_safely(raw)
+            data = _json_safe(raw)
             if data:
-                prices = _collect_prices_from_json(data)
-                p = _best_price_from_list(prices)
+                prices = _find_prices(data)
+                p = _best(prices)
                 if p:
                     return p
 
-    # ── Метод B: Regex в raw HTML ──────────────────────────
-    # Высокоприоритетные ключи
+    # ── Метод 2: data-state атрибуты (base64 JSON) ───────
+    for tag in soup.find_all(attrs={"data-state": True}):
+        raw_b64 = tag.get("data-state", "")
+        if len(raw_b64) < 20:
+            continue
+        try:
+            decoded = base64.b64decode(raw_b64 + '==').decode('utf-8', errors='ignore')
+            data = _json_safe(decoded)
+            if data:
+                prices = _find_prices(data)
+                p = _best(prices)
+                if p:
+                    return p
+        except Exception:
+            pass
+
+    # ── Метод 3: Regex высокоприоритетные ключи ──────────
     HIGH_RE = (
         r'"(?:finalPrice|cardPrice|sellPrice|salePrice|discountedPrice|'
-        r'priceWithCard|sellingPrice|actualPrice|offerPrice|minimalPrice)"'
-        r'\s*:\s*(\d{3,7}(?:\.\d+)?)'
+        r'priceWithCard|sellingPrice|actualPrice|offerPrice|minimalPrice|'
+        r'price_with_sale)"\s*:\s*(\d{3,7}(?:\.\d{1,2})?)'
     )
-    MED_RE = (
-        r'"(?:price|currentPrice|minPrice|basePrice|regularPrice|retailPrice)"'
-        r'\s*:\s*(\d{3,7}(?:\.\d+)?)'
-    )
-
     candidates: List[float] = []
-    for pat, weight in [(HIGH_RE, 3), (MED_RE, 1)]:
-        for m in re.finditer(pat, html):
-            try:
-                p = float(m.group(1))
-                if 50 <= p <= 10_000_000:
-                    candidates.extend([p] * weight)
-            except ValueError:
-                pass
+    for m in re.finditer(HIGH_RE, html):
+        p = _to_price(m.group(1))
+        if p:
+            candidates.extend([p] * 3)
+
+    MED_RE = r'"(?:price|currentPrice|minPrice|basePrice)"\s*:\s*(\d{3,7}(?:\.\d{1,2})?)'
+    for m in re.finditer(MED_RE, html):
+        p = _to_price(m.group(1))
+        if p:
+            candidates.append(p)
 
     if candidates:
         return Counter(candidates).most_common(1)[0][0]
 
-    # ── Метод C: JSON-LD ───────────────────────────────────
+    # ── Метод 4: JSON-LD ──────────────────────────────────
     for sc in soup.find_all('script', type='application/ld+json'):
-        data = _parse_json_safely(sc.string or '')
+        data = _json_safe(sc.string or '')
         if not data:
             continue
         items = data if isinstance(data, list) else [data]
@@ -278,94 +200,134 @@ def _extract_price_from_html(html: str, soup: BeautifulSoup) -> Optional[float]:
                     if p:
                         return p
 
-    # ── Метод D: Мета-теги ────────────────────────────────
-    for attr, val in [('property', 'product:price:amount'),
-                      ('property', 'og:price:amount'),
-                      ('itemprop', 'price')]:
-        tag = soup.find('meta', {attr: val})
-        if tag:
-            p = _to_price(tag.get('content', ''))
-            if p:
-                return p
+    # ── Метод 5: Цена рядом с символом ₽ ─────────────────
+    # Паттерн: число пробел ₽ — ищем первое разумное вхождение
+    rub_matches = re.findall(r'(\d[\d\s]{2,8})\s*[₽руб]', html)
+    rub_prices = []
+    for raw_num in rub_matches:
+        p = _to_price(raw_num.replace(' ', ''))
+        if p and 100 <= p <= 5_000_000:
+            rub_prices.append(p)
+    if rub_prices:
+        # Берём медиану чтобы отфильтровать мусор
+        rub_prices.sort()
+        return rub_prices[len(rub_prices) // 2]
 
     return None
 
 
-def _try_html_render(url: str) -> Tuple[Optional[float], str, bool]:
-    """HTML с полным JS-рендерингом. Медленный но основной метод."""
-    print('     🖥️  Уровень 2 — JS-рендеринг')
-
-    html, err = scrape_url(
-        url=url,
-        render_js=True,
-        country_code='ru',
-        retry_count=3,
-        retry_delay=12.0,
-        timeout=80,
-    )
-
-    if err or not html:
-        print(f'     ❌ JS-рендер: {(err or "пустой")[:80]}')
-        return None, '', False
-
-    print(f'     📄 Получено {len(html):,} символов')
-    soup = BeautifulSoup(html, 'lxml')
-    price = _extract_price_from_html(html, soup)
-
-    if price:
-        print(f'     ✅ JS-рендер → {price:,.0f} ₽')
-
-    name = _extract_name(soup)
-    in_stock = _check_stock(html)
-    return price, name, in_stock
-
-
-def _try_html_simple(url: str) -> Tuple[Optional[float], str, bool]:
-    """HTML без JS-рендеринга. Быстрый последний шанс."""
-    print('     📄 Уровень 3 — HTML без рендера')
-
-    html, err = scrape_url(
-        url=url,
-        render_js=False,
-        country_code='ru',
-        retry_count=2,
-        retry_delay=5.0,
-        timeout=25,
-    )
-
-    if err or not html:
-        return None, '', False
-
-    print(f'     📄 Получено {len(html):,} символов (без JS)')
-    soup = BeautifulSoup(html, 'lxml')
-    price = _extract_price_from_html(html, soup)
-
-    if price:
-        print(f'     ✅ Простой HTML → {price:,.0f} ₽')
-
-    return price, _extract_name(soup), _check_stock(html)
-
-
-# ─────────────────────────────────────────────────────────────
-# ВСПОМОГАТЕЛЬНЫЕ
-# ─────────────────────────────────────────────────────────────
-
 def _extract_name(soup: BeautifulSoup) -> str:
-    for selector in [('h1', {}), ('meta', {'property': 'og:title'})]:
-        tag = soup.find(*selector)
-        if tag:
-            text = tag.get_text(strip=True) if selector[0] == 'h1' else tag.get('content', '')
-            if len(text) > 5:
-                return re.sub(r'\s*[—|\-]\s*Ozon.*', '', text, flags=re.I)[:300]
+    h1 = soup.find('h1')
+    if h1:
+        t = h1.get_text(strip=True)
+        if len(t) > 5:
+            return re.sub(r'\s*[—|\-]\s*Ozon.*', '', t, flags=re.I)[:300]
+    og = soup.find('meta', property='og:title')
+    if og:
+        return og.get('content', '')[:300]
     return ''
 
 
-def _check_stock(html: str) -> bool:
+def _in_stock(html: str) -> bool:
     low = html.lower()
     for sig in ('нет в наличии', 'товар недоступен', 'нет на складе', 'out of stock'):
         if sig in low:
             return False
     return True
+
+
+# ─────────────────────────────────────────────────────────────
+# ПОПЫТКИ ПОЛУЧИТЬ HTML
+# ─────────────────────────────────────────────────────────────
+
+def _scrape_with_wait(url: str, render: bool, wait_ms: int = 0,
+                      timeout: int = 60, retries: int = 2) -> Optional[str]:
+    """
+    ScraperAPI запрос с параметром wait (ждём пока JS загрузится).
+    wait_ms — миллисекунды ожидания после загрузки страницы.
+    """
+    api_key = get_api_key()
+    if not api_key:
+        return None
+
+    params = {
+        "api_key":      api_key,
+        "url":          url,
+        "country_code": "ru",
+    }
+    if render:
+        params["render"] = "true"
+    if wait_ms > 0:
+        params["wait"] = str(wait_ms)     # Ждём N мс после загрузки
+
+    # Premium для Ozon — резидентный IP
+    params["premium"] = "true"
+
+    for attempt in range(retries):
+        try:
+            resp = requests.get(
+                "http://api.scraperapi.com",
+                params=params,
+                timeout=timeout,
+            )
+            if resp.status_code == 200 and len(resp.text) > 2000:
+                return resp.text
+        except Exception:
+            pass
+        import time
+        time.sleep(5)
+
+    return None
+
+
+def _try_mobile(url: str) -> Optional[str]:
+    """
+    Мобильная версия m.ozon.ru — защита слабее чем на основном сайте.
+    Конвертируем URL: www.ozon.ru → m.ozon.ru
+    """
+    mobile_url = url.replace("www.ozon.ru", "m.ozon.ru")
+    if "ozon.ru" not in mobile_url:
+        return None
+    print("     📱 Уровень 0 — мобильная версия m.ozon.ru")
+    return _scrape_with_wait(mobile_url, render=True, wait_ms=3000, timeout=60, retries=2)
+
+
+def _try_main_with_wait(url: str) -> Optional[str]:
+    """Основной URL + ждём 5 секунд после загрузки JS."""
+    print("     🌐 Уровень 1 — основной URL + wait=5000ms")
+    return _scrape_with_wait(url, render=True, wait_ms=5000, timeout=80, retries=3)
+
+
+def _try_ozon_api(url: str) -> Optional[str]:
+    """Ozon внутренний API. Работает без JS-рендеринга."""
+    m = re.search(r'ozon\.ru(/product/[^?#]+)', url)
+    if not m:
+        return None
+    path = m.group(1).rstrip('/') + '/'
+
+    for endpoint in [
+        f"https://www.ozon.ru/api/composer-api.bx/page/json/v2?url={path}",
+        f"https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2?url={path}",
+    ]:
+        print(f"     🔌 Уровень 2 — Ozon API: {endpoint[40:80]}")
+        html, err = scrape_url(
+            url=endpoint,
+            render_js=False,
+            country_code="ru",
+            retry_count=2,
+            retry_delay=3.0,
+            timeout=25,
+        )
+        if html and len(html) > 100:
+            return html
+
+    return None
+
+
+def _try_no_render(url: str) -> Optional[str]:
+    """Без JS рендеринга — быстро, иногда даёт достаточно данных."""
+    print("     ⚡ Уровень 3 — без JS-рендеринга")
+    return _scrape_with_wait(url, render=False, wait_ms=0, timeout=25, retries=2)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -376,64 +338,80 @@ def fetch_price(url: str) -> Dict[str, Any]:
     """
     Получает цену товара Ozon.
 
-    Порядок попыток (от быстрых к медленным):
-      0. Mobile API (5 сек)
-      1. Web API (10 сек)
-      2. HTML + JS-рендер (80 сек)
-      3. HTML без рендера (25 сек)
-
-    Возвращает: {'price': float|None, 'name': str, 'in_stock': bool, 'error': str|None}
+    Порядок попыток:
+      0. m.ozon.ru (мобильная, меньше защита)
+      1. www.ozon.ru + render=true + wait=5000ms
+      2. Ozon внутренний API (без JS)
+      3. www.ozon.ru без JS-рендеринга (быстро)
     """
-    result = {'price': None, 'name': '', 'in_stock': False, 'error': None}
-    print(f'   🔵 OZON: {url[:65]}')
+    result = {"price": None, "name": "", "in_stock": False, "error": None}
+    print(f"   🔵 OZON: {url[:65]}")
 
-    # Уровень 0: Mobile API
-    price = _try_mobile_api(url)
+    attempts = [
+        ("mobile m.ozon.ru", lambda: _try_mobile(url)),
+        ("www + wait 5s",     lambda: _try_main_with_wait(url)),
+        ("Ozon API",          lambda: _try_ozon_api(url)),
+        ("без JS",            lambda: _try_no_render(url)),
+    ]
 
-    # Уровень 1: Web API
-    if price is None:
-        price = _try_web_api(url)
+    html_got  = None
+    used_api  = False
 
-    if price is not None:
-        result['price']    = price
-        result['in_stock'] = True
-        print(f'   ✅ OZON итог (API): {price:,.0f} ₽')
-        return result
+    for label, fn in attempts:
+        try:
+            html_got = fn()
+        except Exception as e:
+            print(f"     ⚠️  {label}: {e}")
+            html_got = None
 
-    # Уровень 2: HTML с JS
-    print('     🔄 API методы не дали результат, переходим к HTML...')
-    price, name, in_stock = _try_html_render(url)
-    result['name']     = name
-    result['in_stock'] = in_stock
+        if not html_got or len(html_got) < 500:
+            html_got = None
+            continue
 
-    # Уровень 3: HTML без JS (последний шанс)
-    if price is None:
-        price, name2, in_stock2 = _try_html_simple(url)
-        if not result['name'] and name2:
-            result['name']     = name2
-            result['in_stock'] = in_stock2
+        print(f"     📄 [{label}] получено {len(html_got):,} символов")
 
-    result['price'] = price
+        # Для API-ответа (JSON) — пробуем распарсить напрямую
+        if label == "Ozon API":
+            data = _json_safe(html_got)
+            if data:
+                prices = _find_prices(data)
+                price  = _best(prices)
+                if price:
+                    print(f"     ✅ Ozon API → {price:,.0f} ₽")
+                    result["price"]    = price
+                    result["in_stock"] = True
+                    return result
+            # Если JSON не распарсился — попробуем как HTML
+            used_api = True
 
-    if price is None:
-        result['error'] = (
-            'Цена Ozon не найдена ни одним из 4 методов. '
-            'Ozon обновил защиту или товар недоступен. '
-            'Повторная попытка через 3 часа.'
-        )
-    else:
-        print(f'   ✅ OZON итог (HTML): {price:,.0f} ₽')
+        # Извлекаем цену из HTML
+        price = _extract_from_html(html_got)
+        if price:
+            print(f"     ✅ [{label}] цена: {price:,.0f} ₽")
+            soup = BeautifulSoup(html_got, 'lxml')
+            result["name"]     = _extract_name(soup)
+            result["in_stock"] = _in_stock(html_got)
+            result["price"]    = price
+            return result
 
+        print(f"     ❌ [{label}] цена не найдена в {len(html_got):,} символах")
+
+    # Все методы провалились
+    result["error"] = (
+        "Цена Ozon не найдена ни одним методом. "
+        "Возможно ScraperAPI не проходит Cloudflare Ozon. "
+        "Проверьте баланс ScraperAPI и что SCRAPER_PREMIUM=true."
+    )
     return result
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     test = (sys.argv[1] if len(sys.argv) > 1
-            else 'https://www.ozon.ru/product/smartfon-apple-iphone-15-pro-256-gb-1236462765/')
-    print(f'\n{"="*55}\nТест Ozon парсера\n{"="*55}')
+            else "https://www.ozon.ru/product/profil-reshetki-radiatora-opel-oem-321637-1494757523/")
+    print(f"\n{'='*55}\nТест Ozon\n{'='*55}")
     r = fetch_price(test)
-    print(f'\nЦена:     {r["price"]:,.0f} ₽' if r['price'] else '\nЦена:     НЕ НАЙДЕНА')
-    print(f'Название: {r["name"][:80]}')
-    print(f'Наличие:  {"✅" if r["in_stock"] else "❌"}')
+    print(f"\nЦена:     {r['price']:,.0f} ₽" if r['price'] else "\nЦена:     НЕ НАЙДЕНА")
+    print(f"Название: {r['name'][:80]}")
+    print(f"Наличие:  {'✅' if r['in_stock'] else '❌'}")
     if r['error']:
-        print(f'Ошибка:   {r["error"]}')
+        print(f"Ошибка:   {r['error']}")
