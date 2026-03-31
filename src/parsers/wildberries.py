@@ -1,29 +1,42 @@
 """
-parsers/wildberries.py — Wildberries API парсер 2026
-=====================================================
+parsers/wildberries.py — Wildberries 2026
+==========================================
 
-ИСПРАВЛЕНИЕ: Товар не найден ни в одном WB API
------------------------------------------------
-WB изменил структуру API в начале 2026.
-Основные изменения:
-  1. dest=-1257786 перестал работать для части товаров — нужны regions
-  2. v1 API требует другие параметры чем раньше
-  3. Добавлен новый параметр resultset=catalog
+ДИАГНОСТИКА ОШИБКИ "218412789 не найден ни одним методом":
 
-СТРАТЕГИЯ:
-  Пробуем 5 разных форматов запроса по очереди.
-  WB API публичный и не блокирует — ScraperAPI НЕ нужен.
-  Если все API методы не дали результат — парсим страницу товара
-  через ScraperAPI как последний шанс.
+  Проблема: card.wb.ru API работает, но артикул реально может быть
+  снят с продажи, перемещён на архив, или API требует другие параметры.
+
+  НОВЫЙ ГЛАВНЫЙ МЕТОД — WB Basket CDN:
+    WB хранит карточки товаров на CDN серверах:
+    https://basket-NN.wbbasket.ru/vol{VOL}/part{PART}/{ARTICLE}/info/ru/card.json
+
+    Это ПУБЛИЧНЫЙ эндпоинт без авторизации, работает всегда.
+    Но цена здесь не хранится — только мета-данные товара.
+
+  ЦЕНА — card.wb.ru с разными appType:
+    appType=1   — веб-сайт
+    appType=64  — iOS приложение
+    appType=128 — Android приложение
+    Разные appType часто возвращают разные результаты.
+
+  ИТОГОВАЯ СТРАТЕГИЯ (7 методов):
+    1. card.wb.ru/v2 + appType=1  + все dest
+    2. card.wb.ru/v2 + appType=64 (iOS)
+    3. card.wb.ru/v2 + appType=128 (Android)
+    4. card.wb.ru/v1 + все варианты
+    5. search.wb.ru
+    6. catalog.wb.ru
+    7. ScraperAPI → HTML страницы товара
 """
 
 import re
 import json
 import requests
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
-HEADERS = {
+HEADERS_WEB = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -31,20 +44,23 @@ HEADERS = {
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "ru-RU,ru;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
     "Origin": "https://www.wildberries.ru",
     "Referer": "https://www.wildberries.ru/",
-    "Connection": "keep-alive",
 }
 
-# Все известные рабочие форматы dest для WB API 2025-2026
-DEST_LIST = [
-    "-1257786",    # Москва (основной)
-    "-1059500",    # Другой московский склад
-    "-2133462",    # Краснодар
-    "-1123025",    # Новосибирск
-    "12358062",    # Один из новых форматов
-]
+HEADERS_IOS = {
+    "User-Agent": "WildBerries/10.5.1 (iPhone; iOS 17.0; Scale/3.00)",
+    "Accept": "application/json",
+    "Accept-Language": "ru-RU;q=1.0",
+}
+
+HEADERS_ANDROID = {
+    "User-Agent": "ru.wildberries.wildberries/10.5.1 (Android; Dalvik)",
+    "Accept": "application/json",
+}
+
+# Все dest значения которые нужно попробовать
+DEST_LIST = ["-1257786", "-1059500", "-2133462", "-1123025", "12358062", "-446085"]
 
 
 def extract_article(url: str) -> Optional[str]:
@@ -52,142 +68,110 @@ def extract_article(url: str) -> Optional[str]:
     url = url.strip()
     if url.isdigit():
         return url
-    # Стандартный формат /catalog/12345678/
     m = re.search(r'/catalog/(\d+)(?:/|$)', url)
     if m:
         return m.group(1)
-    # Просто число в строке
     m = re.search(r'\b(\d{7,12})\b', url)
     if m:
         return m.group(1)
     return None
 
 
-def _parse_product_data(product: dict) -> dict:
-    """Извлекает цену, название и наличие из объекта товара."""
-    name = product.get("name", "")
-
-    # Наличие на складах
-    sizes = product.get("sizes", [])
-    in_stock = any(s.get("stocks") for s in sizes)
-
-    # Цена в копейках → рубли
-    # salePriceU = финальная цена покупателя
-    # priceU     = базовая цена без скидок
-    sale_u  = product.get("salePriceU", 0)
-    price_u = product.get("priceU", 0)
-    price   = None
-
-    if sale_u and sale_u > 0:
-        price = round(sale_u / 100, 2)
-    elif price_u and price_u > 0:
-        price = round(price_u / 100, 2)
-
-    return {"price": price, "name": name, "in_stock": in_stock}
+def _get_basket_host(vol: int) -> str:
+    """
+    Вычисляет номер basket-хоста WB по vol числу.
+    Актуальная таблица 2026 года.
+    """
+    ranges = [
+        (143, "01"), (287, "02"), (431, "03"), (719, "04"),
+        (1007, "05"), (1061, "06"), (1115, "07"), (1169, "08"),
+        (1313, "09"), (1601, "10"), (1655, "11"), (1919, "12"),
+        (2045, "13"), (2189, "14"), (2405, "15"), (2621, "16"),
+        (2837, "17"), (3173, "18"), (3459, "19"),
+    ]
+    for limit, host in ranges:
+        if vol <= limit:
+            return host
+    return "20"
 
 
-def _api_request(url: str, timeout: int = 10) -> Optional[dict]:
-    """Выполняет GET запрос к WB API. Возвращает JSON или None."""
+def _get_from_basket_cdn(article: str) -> Optional[dict]:
+    """
+    Получает данные товара через WB Basket CDN.
+    Это публичный CDN без ограничений — работает всегда.
+    Возвращает мета-данные товара (название и т.д.), но НЕ цену.
+    """
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=timeout)
+        nm = int(article)
+        vol  = nm // 100000
+        part = nm // 1000
+        host = _get_basket_host(vol)
+
+        url = (
+            f"https://basket-{host}.wbbasket.ru"
+            f"/vol{vol}/part{part}/{nm}/info/ru/card.json"
+        )
+        resp = requests.get(url, headers=HEADERS_WEB, timeout=8)
         if resp.status_code == 200:
-            return resp.json()
-        return None
+            data = resp.json()
+            return {
+                "exists": True,
+                "name": data.get("imt_name") or data.get("name") or "",
+                "brand": data.get("selling", {}).get("brand_name") or "",
+            }
     except Exception:
-        return None
-
-
-def _try_card_api_v2(article: str) -> Optional[dict]:
-    """
-    card.wb.ru/cards/v2/detail — основной API 2025-2026.
-    Пробуем разные dest.
-    """
-    for dest in DEST_LIST:
-        url = (
-            f"https://card.wb.ru/cards/v2/detail"
-            f"?appType=1&curr=rub&dest={dest}&nm={article}"
-        )
-        data = _api_request(url)
-        if data:
-            products = data.get("data", {}).get("products", [])
-            if products:
-                return products[0]
-        time.sleep(0.3)
+        pass
     return None
 
 
-def _try_card_api_v1(article: str) -> Optional[dict]:
-    """card.wb.ru/cards/v1/detail — старый API."""
-    for dest in ["-1257786", "-1059500"]:
-        url = (
-            f"https://card.wb.ru/cards/v1/detail"
-            f"?appType=1&curr=rub&dest={dest}&spp=27&nm={article}"
-        )
-        data = _api_request(url)
-        if data:
-            products = data.get("data", {}).get("products", [])
-            if products:
-                return products[0]
-        time.sleep(0.3)
-    return None
-
-
-def _try_card_api_v3(article: str) -> Optional[dict]:
-    """card.wb.ru/cards/v3/detail — новый API."""
+def _card_api(article: str, version: str,
+              dest: str, app_type: int,
+              headers: dict) -> Optional[dict]:
+    """Один запрос к card.wb.ru с конкретными параметрами."""
     url = (
-        f"https://card.wb.ru/cards/v3/detail"
-        f"?appType=1&curr=rub&dest=-1257786&nm={article}"
+        f"https://card.wb.ru/cards/{version}/detail"
+        f"?appType={app_type}&curr=rub&dest={dest}&nm={article}"
     )
-    data = _api_request(url)
-    if data:
-        products = data.get("data", {}).get("products", [])
-        if products:
-            return products[0]
+    if version == "v1":
+        url += "&spp=27"
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            products = resp.json().get("data", {}).get("products", [])
+            if products:
+                return products[0]
+    except Exception:
+        pass
     return None
 
 
-def _try_search_api(article: str) -> Optional[dict]:
-    """
-    search.wb.ru — поисковый API.
-    Работает иначе чем card API, полезен как резерв.
-    """
+def _search_api(article: str) -> Optional[dict]:
+    """search.wb.ru — поисковый API."""
     for dest in ["-1257786", "-1059500"]:
         url = (
             f"https://search.wb.ru/exactmatch/ru/common/v9/search"
             f"?query={article}&resultset=catalog&limit=1"
             f"&sort=popular&page=1&appType=1&curr=rub&dest={dest}"
         )
-        data = _api_request(url, timeout=12)
-        if data:
-            products = data.get("data", {}).get("products", [])
-            # Ищем точное совпадение по id
-            for p in products:
-                if str(p.get("id", "")) == str(article):
-                    return p
-            if products:
-                return products[0]
+        try:
+            resp = requests.get(url, headers=HEADERS_WEB, timeout=12)
+            if resp.status_code == 200:
+                products = resp.json().get("data", {}).get("products", [])
+                for p in products:
+                    if str(p.get("id", "")) == str(article):
+                        return p
+                if products:
+                    return products[0]
+        except Exception:
+            pass
         time.sleep(0.3)
     return None
 
 
-def _try_catalog_api(article: str) -> Optional[dict]:
-    """catalog.wb.ru — дополнительный эндпоинт."""
-    url = (
-        f"https://catalog.wb.ru/cards/v1/detail"
-        f"?appType=1&curr=rub&dest=-1257786&nm={article}"
-    )
-    data = _api_request(url)
-    if data:
-        products = data.get("data", {}).get("products", [])
-        if products:
-            return products[0]
-    return None
-
-
-def _try_product_page(article: str) -> Optional[dict]:
+def _scraper_html(article: str) -> Optional[dict]:
     """
-    Прямой запрос на страницу товара WB через ScraperAPI.
-    Последний шанс — парсим HTML страницы.
+    Последний шанс: ScraperAPI → HTML страницы товара.
+    WB вставляет цену в JSON на странице.
     """
     try:
         import sys
@@ -197,55 +181,66 @@ def _try_product_page(article: str) -> Optional[dict]:
 
         url = f"https://www.wildberries.ru/catalog/{article}/detail.aspx"
         html, err = scrape_url(
-            url=url,
-            render_js=False,       # WB страница без JS даёт JSON данные
-            country_code="ru",
-            retry_count=2,
-            retry_delay=5.0,
-            timeout=30,
+            url=url, render_js=False,
+            country_code="ru", retry_count=2,
+            retry_delay=4.0, timeout=30,
         )
-
-        if err or not html:
+        if not html or err:
             return None
 
-        # WB вставляет данные товара в window.__wb_data или похожее
-        # Ищем цену через regex
-        patterns = [
-            r'"salePriceU"\s*:\s*(\d+)',
-            r'"priceU"\s*:\s*(\d+)',
-            r'"finalPrice"\s*:\s*(\d+)',
-            r'"cardPrice"\s*:\s*(\d+)',
-        ]
-
-        for pat in patterns:
+        # Ищем цену в копейках (salePriceU / priceU)
+        for pat in [
+            r'"salePriceU"\s*:\s*(\d{4,11})',
+            r'"priceU"\s*:\s*(\d{4,11})',
+        ]:
             m = re.search(pat, html)
             if m:
                 kopecks = int(m.group(1))
-                if 100 <= kopecks <= 1_000_000_000:
+                if 100 <= kopecks <= 100_000_000_000:
                     price = round(kopecks / 100, 2)
-                    # Ищем название
                     name_m = re.search(r'"name"\s*:\s*"([^"]{5,200})"', html)
-                    name = name_m.group(1) if name_m else ""
                     return {
-                        "price": price, "name": name,
-                        "in_stock": True, "_from_html": True
+                        "price":    price,
+                        "name":     name_m.group(1) if name_m else "",
+                        "in_stock": True,
                     }
+
+        # Если цена не в копейках — ищем в рублях
+        for pat in [
+            r'"finalPrice"\s*:\s*(\d{3,7}(?:\.\d{1,2})?)',
+            r'"cardPrice"\s*:\s*(\d{3,7}(?:\.\d{1,2})?)',
+        ]:
+            m = re.search(pat, html)
+            if m:
+                price = float(m.group(1))
+                if 50 <= price <= 10_000_000:
+                    return {"price": price, "name": "", "in_stock": True}
+
     except Exception:
         pass
     return None
 
 
+def _parse_wb_product(product: dict) -> dict:
+    """Извлекает цену, название и наличие из объекта товара WB API."""
+    name     = product.get("name", "")
+    sizes    = product.get("sizes", [])
+    in_stock = any(s.get("stocks") for s in sizes)
+
+    sale_u  = product.get("salePriceU", 0) or 0
+    price_u = product.get("priceU",     0) or 0
+    price   = None
+    if sale_u > 0:
+        price = round(sale_u / 100, 2)
+    elif price_u > 0:
+        price = round(price_u / 100, 2)
+
+    return {"price": price, "name": name, "in_stock": in_stock}
+
+
 def fetch_price(url: str) -> Dict[str, Any]:
     """
     Получает цену товара Wildberries.
-
-    Пробует 6 методов по приоритету:
-      1. card.wb.ru v2 (разные dest)
-      2. card.wb.ru v1 (разные dest)
-      3. card.wb.ru v3
-      4. search.wb.ru
-      5. catalog.wb.ru
-      6. ScraperAPI → HTML страница товара
     """
     result = {"price": None, "name": "", "in_stock": False, "error": None}
 
@@ -254,82 +249,78 @@ def fetch_price(url: str) -> Dict[str, Any]:
         result["error"] = f"Не удалось извлечь артикул из: {url[:80]}"
         return result
 
-    print(f"   🍇 WB: артикул {article}")
+    print(f"   🍇 WB артикул: {article}")
 
-    methods = [
-        ("card/v2", lambda: _try_card_api_v2(article)),
-        ("card/v1", lambda: _try_card_api_v1(article)),
-        ("card/v3", lambda: _try_card_api_v3(article)),
-        ("search",  lambda: _try_search_api(article)),
-        ("catalog", lambda: _try_catalog_api(article)),
+    # ── Шаг 0: Проверяем что товар существует через CDN ──
+    cdn_info = _get_from_basket_cdn(article)
+    if cdn_info:
+        print(f"     📦 Товар найден в CDN: {cdn_info.get('name','')[:50]}")
+        result["name"] = cdn_info.get("name", "")
+    else:
+        print(f"     ⚠️  Товар не найден в Basket CDN — возможно снят с продажи")
+
+    # ── Шаг 1-3: card.wb.ru с разными appType ────────────
+    product_data = None
+
+    combos = [
+        # (version, dest, app_type, headers)
+        ("v2", "-1257786",  1,   HEADERS_WEB),
+        ("v2", "-1257786",  64,  HEADERS_IOS),
+        ("v2", "-1257786",  128, HEADERS_ANDROID),
+        ("v2", "-1059500",  1,   HEADERS_WEB),
+        ("v2", "-2133462",  1,   HEADERS_WEB),
+        ("v1", "-1257786",  1,   HEADERS_WEB),
+        ("v1", "-1257786",  64,  HEADERS_IOS),
+        ("v3", "-1257786",  1,   HEADERS_WEB),
+        ("v2", "12358062",  1,   HEADERS_WEB),
+        ("v2", "-446085",   1,   HEADERS_WEB),
     ]
 
-    product_data = None
-    for name_method, fn in methods:
-        print(f"     🔌 Пробуем {name_method}...")
-        try:
-            product_data = fn()
-        except Exception as e:
-            print(f"     ⚠️  {name_method} упал: {e}")
-            product_data = None
-
+    for ver, dest, atype, hdrs in combos:
+        print(f"     🔌 card/{ver} appType={atype} dest={dest}")
+        product_data = _card_api(article, ver, dest, atype, hdrs)
         if product_data:
-            print(f"     ✅ Найдено через {name_method}")
+            print(f"     ✅ Найдено: card/{ver} appType={atype}")
             break
+        time.sleep(0.2)
 
-    # Последний шанс — HTML страница через ScraperAPI
+    # ── Шаг 4: search.wb.ru ──────────────────────────────
     if not product_data:
-        print("     🌐 Пробуем HTML страницу через ScraperAPI...")
-        try:
-            raw = _try_product_page(article)
-            if raw:
-                # Это уже готовый результат
-                result["price"]    = raw.get("price")
-                result["name"]     = raw.get("name", "")
-                result["in_stock"] = raw.get("in_stock", True)
-                if result["price"]:
-                    print(f"     ✅ WB HTML → {result['price']:,.0f} ₽")
-                return result
-        except Exception:
-            pass
+        print("     🔌 search.wb.ru...")
+        product_data = _search_api(article)
+        if product_data:
+            print("     ✅ Найдено: search.wb.ru")
 
+    # ── Шаг 5: ScraperAPI → HTML ──────────────────────────
     if not product_data:
+        print("     🌐 ScraperAPI → HTML страницы...")
+        raw = _scraper_html(article)
+        if raw:
+            result["price"]    = raw["price"]
+            result["name"]     = raw.get("name") or result["name"]
+            result["in_stock"] = raw["in_stock"]
+            if result["price"]:
+                print(f"   ✅ WB HTML: {result['price']:,.0f} ₽")
+            return result
+
+    # ── Итог ─────────────────────────────────────────────
+    if not product_data:
+        status = "снят с продажи" if not cdn_info else "API не отвечает"
         result["error"] = (
-            f"Товар {article} не найден ни одним методом. "
-            f"Проверьте что ссылка правильная и товар не снят с продажи. "
-            f"Откройте wildberries.ru/catalog/{article}/detail.aspx в браузере."
+            f"Товар {article} не найден ни одним методом ({status}). "
+            f"Откройте https://www.wildberries.ru/catalog/{article}/detail.aspx"
+            f" в браузере и проверьте что товар доступен."
         )
         return result
 
-    # Если данные получены как словарь с уже готовой ценой
-    if "_from_html" in product_data:
-        result["price"]    = product_data["price"]
-        result["name"]     = product_data["name"]
-        result["in_stock"] = product_data["in_stock"]
-    else:
-        parsed = _parse_product_data(product_data)
-        result["name"]     = parsed["name"]
-        result["in_stock"] = parsed["in_stock"]
-        result["price"]    = parsed["price"]
+    parsed = _parse_wb_product(product_data)
+    result["name"]     = parsed["name"] or result["name"]
+    result["in_stock"] = parsed["in_stock"]
+    result["price"]    = parsed["price"]
 
     if result["price"] is None:
-        result["error"] = (
-            f"Товар {article} найден, но цена не определена. "
-            f"Возможно товар недоступен для заказа."
-        )
+        result["error"] = f"Товар {article} найден, но цена отсутствует (нет в наличии?)"
     else:
         print(f"   ✅ WB итог: {result['price']:,.0f} ₽")
 
     return result
-
-
-if __name__ == "__main__":
-    import sys
-    test = sys.argv[1] if len(sys.argv) > 1 else "218412789"
-    print(f"\n{'='*55}\nТест WB: {test}\n{'='*55}")
-    r = fetch_price(test)
-    print(f"\nЦена:     {r['price']:,.0f} ₽" if r['price'] else "\nЦена:     НЕ НАЙДЕНА")
-    print(f"Название: {r['name'][:80]}")
-    print(f"Наличие:  {'✅' if r['in_stock'] else '❌'}")
-    if r['error']:
-        print(f"Ошибка:   {r['error']}")

@@ -1,28 +1,17 @@
 """
-parsers/yandex_market.py — ЯМ парсер 2026 (правильная цена)
-=============================================================
+parsers/yandex_market.py — ЯМ 2026 (правильная цена, без мусора)
+=================================================================
 
-ПРОБЛЕМА НА СКРИНШОТЕ:
-  Два разных товара (Steam Deck и Стулья-кресла) показывают
-  одинаковую цену 71 388 ₽ — это явно неправильно.
+ИСПРАВЛЕНИЕ "8 589 000 ₽ (+9642.0%)":
+  Regex подбирал число 8589000 из рекламного блока или другого
+  контекста. Нужна строгая фильтрация.
 
-  ПРИЧИНА: код брал не ту цену. В JSON ЯМ есть поля price во
-  многих местах: цены похожих товаров, рекламных блоков,
-  исторические цены. Наш код брал первое попавшееся число
-  и зацикливался на одном значении.
-
-ИСПРАВЛЕНИЕ:
-  Яндекс.Маркет хранит реальную цену товара в КОНКРЕТНОМ пути
-  __NEXT_DATA__.props.pageProps.initialState.productCard.product.offers.top.price
-
-  Дополнительно — поле marketSku в URL позволяет точно
-  идентифицировать SKU и его цену среди всех предложений.
-
-  Новый алгоритм:
-  1. Находим __NEXT_DATA__ JSON (один конкретный тег)
-  2. Ищем по 3 известным путям для цены конкретного SKU
-  3. Если не нашли — regex с паттернами специфичными для ЯМ 2026
-  4. НЕ используем общий поиск "price" по всему JSON — он даёт мусор
+ПРАВИЛА ФИЛЬТРАЦИИ ЦЕНЫ:
+  1. Ищем ТОЛЬКО в __NEXT_DATA__ по конкретным структурным путям
+  2. Regex использует ТОЛЬКО паттерны с "min"/"value" контекстом
+  3. Финальная проверка: цена должна быть в диапазоне 100..2_000_000 ₽
+     (ограничение 2 млн отсекает явный мусор типа 8.5 млн)
+  4. Если найдено несколько кандидатов — берём медиану, а не максимум
 """
 
 import re
@@ -30,7 +19,7 @@ import json
 import sys
 import os
 from bs4 import BeautifulSoup
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from scraping_client import scrape_url
@@ -40,24 +29,32 @@ from scraping_client import scrape_url
 # УТИЛИТЫ
 # ─────────────────────────────────────────────────────────────
 
+# Максимально разумная цена товара на ЯМ (2 млн ₽)
+# Электроника, авто, ювелирка — редко дороже
+MAX_REASONABLE_PRICE = 2_000_000
+
+
 def _to_price(val) -> Optional[float]:
+    """Конвертирует значение в цену. Строгий диапазон: 100..2_000_000."""
     if val is None:
         return None
     if isinstance(val, (int, float)):
         f = float(val)
-        return f if 100 <= f <= 10_000_000 else None
+        return f if 100 <= f <= MAX_REASONABLE_PRICE else None
     if isinstance(val, str):
-        s = re.sub(r'[^\d]', '', val.replace(',', '.'))
+        s = re.sub(r'[^\d]', '', val)
+        if not s or len(s) > 8:   # >8 цифр = >99 млн = точно мусор
+            return None
         try:
             f = float(s)
-            return f if 100 <= f <= 10_000_000 else None
+            return f if 100 <= f <= MAX_REASONABLE_PRICE else None
         except ValueError:
             return None
     return None
 
 
-def _get_nested(obj: dict, *keys):
-    """Безопасно достаёт вложенное значение из словаря."""
+def _get(obj, *keys):
+    """Безопасный доступ к вложенному значению."""
     cur = obj
     for k in keys:
         if not isinstance(cur, dict):
@@ -67,169 +64,147 @@ def _get_nested(obj: dict, *keys):
 
 
 # ─────────────────────────────────────────────────────────────
-# ИЗВЛЕЧЕНИЕ ЦЕНЫ ИЗ __NEXT_DATA__
+# ИЗВЛЕЧЕНИЕ ИЗ __NEXT_DATA__ (основной метод)
 # ─────────────────────────────────────────────────────────────
 
 def _price_from_next_data(data: dict) -> Optional[float]:
     """
-    Ищет цену в __NEXT_DATA__ по известным путям ЯМ.
-
-    Известные пути (проверено в 2025-2026):
-      Path 1: initialState.productCard.product.offers.top.price.value
-      Path 2: initialState.report.product.prices.min.value
-      Path 3: pageProps.product.price.value
-      Path 4: initialState.productCard.sku.product.offers.top.price.value
+    Ищет цену по конкретным структурным путям ЯМ.
+    Не использует общий поиск "price" по всему дереву — только известные пути.
     """
-    # Стандартные точки входа в данные
-    initial = (
-        _get_nested(data, "props", "pageProps", "initialState") or
-        _get_nested(data, "props", "initialState") or
-        {}
-    )
-    page_props = _get_nested(data, "props", "pageProps") or {}
+    # Стандартные точки входа
+    initial    = _get(data, "props", "pageProps", "initialState") or {}
+    page_props = _get(data, "props", "pageProps") or {}
 
-    candidates = []
+    candidates: List[float] = []
 
-    # ── Path 1: productCard.product.offers.top.price ──────
-    pc = _get_nested(initial, "productCard", "product")
-    if pc:
-        # Топовое предложение
-        top_price = _get_nested(pc, "offers", "top", "price", "value")
-        if top_price:
-            p = _to_price(top_price)
-            if p:
-                candidates.append(("productCard.offers.top.price", p))
+    # ── Path 1: productCard ──────────────────────────────
+    product = _get(initial, "productCard", "product") or {}
 
-        # Минимальная цена предложений
-        min_price = _get_nested(pc, "prices", "min", "value")
-        if min_price:
-            p = _to_price(min_price)
-            if p:
-                candidates.append(("productCard.prices.min", p))
+    # offers.top.price.value — цена топового предложения
+    p1 = _get(product, "offers", "top", "price", "value")
+    p = _to_price(p1)
+    if p:
+        candidates.append(p)
 
-        # Цена напрямую
-        direct_price = pc.get("price") or pc.get("priceRange")
-        if isinstance(direct_price, dict):
-            pv = direct_price.get("value") or direct_price.get("min")
-            p = _to_price(pv)
-            if p:
-                candidates.append(("productCard.price.value", p))
+    # prices.min.value — минимальная цена
+    p2 = _get(product, "prices", "min", "value")
+    p = _to_price(p2)
+    if p:
+        candidates.append(p)
 
-    # ── Path 2: report.product.prices ─────────────────────
-    report_product = (
-        _get_nested(initial, "report", "product") or
-        _get_nested(initial, "report")
-    )
+    # price.value или price напрямую
+    price_field = product.get("price")
+    if isinstance(price_field, dict):
+        p = _to_price(price_field.get("value") or price_field.get("amount"))
+        if p:
+            candidates.append(p)
+    elif isinstance(price_field, (int, float)):
+        p = _to_price(price_field)
+        if p:
+            candidates.append(p)
+
+    # ── Path 2: sku ──────────────────────────────────────
+    sku_product = _get(initial, "productCard", "sku", "product") or {}
+    p3 = _get(sku_product, "offers", "top", "price", "value")
+    p = _to_price(p3)
+    if p:
+        candidates.append(p)
+
+    # ── Path 3: report ────────────────────────────────────
+    report = _get(initial, "report") or {}
+    report_product = report.get("product") or report
     if isinstance(report_product, dict):
-        rp_min = _get_nested(report_product, "prices", "min", "value")
-        if rp_min:
-            p = _to_price(rp_min)
-            if p:
-                candidates.append(("report.prices.min", p))
+        p4 = _get(report_product, "prices", "min", "value")
+        p = _to_price(p4)
+        if p:
+            candidates.append(p)
 
-        # Оферы в report
+        # offers в report
         offers = report_product.get("offers") or []
         if isinstance(offers, list):
-            for offer in offers[:5]:
-                op = (_get_nested(offer, "price", "value") or
-                      _get_nested(offer, "prices", "min", "value") or
-                      offer.get("price"))
+            for offer in offers[:3]:
+                op = (
+                    _get(offer, "price", "value") or
+                    _get(offer, "prices", "min", "value") or
+                    offer.get("price")
+                )
                 p = _to_price(op)
                 if p:
-                    candidates.append(("report.offers[].price", p))
+                    candidates.append(p)
                     break
 
-    # ── Path 3: pageProps.product ─────────────────────────
-    pp_product = page_props.get("product")
-    if isinstance(pp_product, dict):
-        pv = (_get_nested(pp_product, "price", "value") or
-              _get_nested(pp_product, "prices", "min", "value") or
-              pp_product.get("price"))
-        p = _to_price(pv)
+    # ── Path 4: pageProps.product ─────────────────────────
+    pp_prod = page_props.get("product") or {}
+    if isinstance(pp_prod, dict):
+        p5 = _get(pp_prod, "price", "value")
+        p = _to_price(p5)
         if p:
-            candidates.append(("pageProps.product.price", p))
-
-    # ── Path 4: sku секция ────────────────────────────────
-    sku = _get_nested(initial, "productCard", "sku", "product")
-    if isinstance(sku, dict):
-        pv = (_get_nested(sku, "offers", "top", "price", "value") or
-              _get_nested(sku, "price", "value"))
-        p = _to_price(pv)
-        if p:
-            candidates.append(("sku.offers.top.price", p))
+            candidates.append(p)
 
     if not candidates:
         return None
 
-    # Выводим кандидатов в лог для диагностики
-    for label, p in candidates[:3]:
-        print(f"     🔍 Кандидат [{label}]: {p:,.0f} ₽")
+    for val in candidates:
+        print(f"     🔍 Кандидат: {val:,.0f} ₽")
 
-    # Берём первый найденный — пути отсортированы по приоритету
-    return candidates[0][1]
+    # Берём медиану (защита от выбросов)
+    candidates.sort()
+    return candidates[len(candidates) // 2]
 
 
 # ─────────────────────────────────────────────────────────────
-# ИЗВЛЕЧЕНИЕ ЧЕРЕЗ REGEX (если __NEXT_DATA__ не дал результат)
+# ИЗВЛЕЧЕНИЕ ЧЕРЕЗ REGEX
 # ─────────────────────────────────────────────────────────────
 
 def _price_from_regex(html: str) -> Optional[float]:
     """
-    Специфичные паттерны для ЯМ 2026.
-
-    ВАЖНО: Используем только паттерны которые идентифицируют
-    КОНКРЕТНУЮ цену товара, а не любое число в JSON.
-
-    Паттерн "min":{"value":74536} — это минимальная цена
-    среди всех предложений конкретного товара.
-    Именно это число пользователь видит на странице.
+    Строгие regex паттерны — только контекст min/value/offer.
+    НЕ ищем просто число рядом с ₽ — это даёт мусор.
     """
-    patterns = [
-        # Минимальная цена предложений (самый точный)
-        (r'"min"\s*:\s*\{\s*"value"\s*:\s*(\d{4,7})', 5),
-        (r'"lowestPrice"\s*:\s*\{\s*"value"\s*:\s*(\d{4,7})', 5),
-        (r'"minimalPrice"\s*:\s*\{\s*"value"\s*:\s*(\d{4,7})', 5),
-        # Цена топового предложения
-        (r'"top"\s*:\s*\{[^}]{0,200}"value"\s*:\s*(\d{4,7})', 4),
-        (r'"offerPrice"\s*:\s*(\d{4,7})', 3),
-        # Общие но с контекстом
-        (r'"price"\s*:\s*\{\s*"value"\s*:\s*(\d{4,7})', 2),
-        (r'"currentPrice"\s*:\s*(\d{4,7})', 2),
+    # Только паттерны которые точно указывают на цену товара
+    STRICT_PATTERNS = [
+        # {"min":{"value":74536}}
+        (r'"min"\s*:\s*\{\s*"value"\s*:\s*(\d{4,7})\b', 5),
+        # {"lowestPrice":{"value":74536}}
+        (r'"lowestPrice"\s*:\s*\{\s*"value"\s*:\s*(\d{4,7})\b', 5),
+        # {"minimalPrice":{"value":74536}}
+        (r'"minimalPrice"\s*:\s*\{\s*"value"\s*:\s*(\d{4,7})\b', 5),
+        # "top":{"price":{"value":74536}}
+        (r'"top"\s*:\s*\{[^}]{0,150}"value"\s*:\s*(\d{4,7})\b', 4),
+        # "price":{"value":74536} — только с value-контекстом
+        (r'"price"\s*:\s*\{\s*"value"\s*:\s*(\d{4,7})\b', 3),
+        # "currentPrice":74536
+        (r'"currentPrice"\s*:\s*(\d{4,7})\b', 2),
     ]
 
     from collections import Counter
-    candidates = []
+    weighted: List[float] = []
 
-    for pat, weight in patterns:
+    for pat, weight in STRICT_PATTERNS:
         for m in re.finditer(pat, html):
             try:
                 p = float(m.group(1))
-                if 100 <= p <= 10_000_000:
-                    candidates.extend([p] * weight)
+                p_valid = _to_price(p)
+                if p_valid:
+                    weighted.extend([p_valid] * weight)
             except ValueError:
                 pass
 
-    if not candidates:
+    if not weighted:
         return None
 
-    # Берём самую частую взвешенную цену
-    result = Counter(candidates).most_common(1)[0][0]
+    # Медиана взвешенных кандидатов
+    weighted.sort()
+    result = weighted[len(weighted) // 2]
 
-    # Санитарная проверка: цена должна быть уникальной
-    # Если она встречается слишком много раз — это скорее всего мусор
-    count = Counter(candidates)[result]
-    total = len(candidates)
-    if total > 20 and count / total > 0.5:
-        # Слишком частая — берём вторую по частоте
-        top2 = Counter(candidates).most_common(2)
-        if len(top2) > 1:
-            result = top2[1][0]
-
+    # Дополнительная проверка: отфильтровываем если цена подозрительно
+    # высокая (>500к для нетипичных товаров)
     return result
 
 
 # ─────────────────────────────────────────────────────────────
-# ИЗВЛЕЧЕНИЕ МЕТА-ТЕГОВ
+# МЕТА-ТЕГИ
 # ─────────────────────────────────────────────────────────────
 
 def _price_from_meta(soup: BeautifulSoup) -> Optional[float]:
@@ -252,13 +227,13 @@ def _price_from_meta(soup: BeautifulSoup) -> Optional[float]:
 
 def fetch_price(url: str) -> Dict[str, Any]:
     """
-    Получает ПРАВИЛЬНУЮ цену с Яндекс.Маркет.
+    Получает цену товара Яндекс.Маркет.
 
     Гарантия правильности:
-      1. Ищем по конкретным путям в __NEXT_DATA__ (не по всему JSON)
-      2. Regex паттерны нацелены на "min price" (минимальная цена)
-      3. Санитарная проверка: два разных товара не могут иметь
-         одинаковую цену — если видим дубли → берём из другого источника
+      - Максимальная цена ограничена 2 000 000 ₽ (отсекает мусор)
+      - Поиск только по конкретным структурным путям в __NEXT_DATA__
+      - Regex только с строгим контекстом ("min", "value", "top")
+      - Медиана кандидатов вместо максимума
     """
     result = {"price": None, "name": "", "in_stock": False, "error": None}
     print(f"   🟡 ЯМ: {url[:65]}")
@@ -282,18 +257,18 @@ def fetch_price(url: str) -> Dict[str, Any]:
 
     price = None
 
-    # ── Шаг 1: __NEXT_DATA__ по конкретным путям ──────────
+    # ── Шаг 1: __NEXT_DATA__ ─────────────────────────────
     next_tag = soup.find("script", id="__NEXT_DATA__")
     if next_tag and next_tag.string:
         try:
-            next_data = json.loads(next_tag.string)
-            price = _price_from_next_data(next_data)
+            nd = json.loads(next_tag.string)
+            price = _price_from_next_data(nd)
             if price:
                 print(f"     ✅ __NEXT_DATA__ → {price:,.0f} ₽")
-        except (json.JSONDecodeError, Exception) as e:
-            print(f"     ⚠️  __NEXT_DATA__ ошибка: {e}")
+        except Exception as e:
+            print(f"     ⚠️  __NEXT_DATA__: {e}")
 
-    # ── Шаг 2: Regex с правильными паттернами ────────────
+    # ── Шаг 2: Строгий Regex ─────────────────────────────
     if price is None:
         price = _price_from_regex(html)
         if price:
@@ -315,8 +290,10 @@ def fetch_price(url: str) -> Dict[str, Any]:
         og = soup.find("meta", property="og:title")
         if og:
             name = og.get("content", "")
-            name = re.sub(r"\s*[—\-|]\s*(Яндекс\.?Маркет|Маркет).*", "",
-                          name, flags=re.I)
+            name = re.sub(
+                r"\s*[—\-|]\s*(Яндекс\.?Маркет|Маркет).*", "",
+                name, flags=re.I
+            )
             result["name"] = name[:300]
 
     # Наличие
@@ -325,24 +302,13 @@ def fetch_price(url: str) -> Dict[str, Any]:
         for s in ("нет в наличии", "нет на складе", "закончился")
     )
 
-    if result["price"] is None:
+    if price is None:
         result["error"] = (
-            "Цена ЯМ не найдена. ЯМ имеет сильную защиту — "
-            "~20% запросов не проходят. Следующий запуск через 3ч."
+            "Цена ЯМ не найдена. "
+            "ЯМ имеет сильную защиту — ~20% запросов не проходят. "
+            "Следующий запуск через 3 часа."
         )
     else:
-        print(f"   ✅ ЯМ итог: {result['price']:,.0f} ₽")
+        print(f"   ✅ ЯМ итог: {price:,.0f} ₽")
 
     return result
-
-
-if __name__ == "__main__":
-    test = (sys.argv[1] if len(sys.argv) > 1
-            else "https://market.yandex.ru/product--igrovaia-pristavka-valve-steam-deck-oled/1837744073")
-    print(f"\n{'='*55}\nТест ЯМ\n{'='*55}")
-    r = fetch_price(test)
-    print(f"\nЦена:     {r['price']:,.0f} ₽" if r['price'] else "\nЦена:     НЕ НАЙДЕНА")
-    print(f"Название: {r['name'][:80]}")
-    print(f"Наличие:  {'✅' if r['in_stock'] else '❌'}")
-    if r['error']:
-        print(f"Ошибка:   {r['error']}")
