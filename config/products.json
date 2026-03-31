@@ -1,27 +1,9 @@
 {
   "products": [
-    {
-      "id": "wb_001",
-      "name": "Джоггеры джинсовые на резинке спортивные брюки карго",
-      "url": "https://www.wildberries.ru/catalog/218412789/detail.aspx",
-      "marketplace": "wildberries",
-      "alert_threshold": 5,
-      "active": true,
-      "notes": "Описание или заметка о товаре"
-    },
      {
-      "id": "ozon_001",
-      "name": "Профиль решетки радиатора Opel ОЕМ 13368852",
-      "url": "https://www.ozon.ru/product/reshetka-radiatora-dlya-opel-astra-j-2009-2012-opel-astra-j-reshetka-radiatora-de-ga-opl09as016-1035455777/",
-      "marketplace": "ozon",
-      "alert_threshold": 5,
-      "active": true,
-      "notes": ""
-    },
-    {
-      "id": "ym_001",
-      "name": "Игровая приставка Valve Steam Deck LCD 1 ТБ SSD",
-      "url": "https://market.yandex.ru/card/igrovaya-pristavka-valve-steam-deck-lcd-1-tb-ssd/4824518400?do-waremd5=VmvyOIXl_5uU1O61l_hmGw&sponsored=1&cpc=w9DBCWz2kix8B7Bi2lm2VYL1afmT9VyXT4pYKrwfrEA0bZQBQEH-E41l8uyrGYVaI4DIoQOQ5NX-SGkm9ozibSY2B5UkE5fT5q-LUe212zlDfahrQ9ApjKsdUtXaqu_9F_U1X1RXU9iOVNveS53OeEn39zuzohD9YbF7rc04odgUOSeIBfAZHymIHuAwBwv5eFNr6lkd3iObJeOFQ9ayAnxwUVk_iLWszza4GV_0DSnBDGFMUVAgwhXIo09lOWeqpWLRSJyqxC7l7ROAH0zDzQ%2C%2C&ogV=-12",
+      "id": "ym22",
+      "name": "3d принтер",
+      "url": "https://market.yandex.ru/card/3d-printery-tronxy-crux-1-mini-3d-printer-dlya-nachinayushchikh-bystraya-sborka-pryamoy-privod-razmer-pechati-180x180x180-mm/4620250909?nid=27022410&isComfortPlus=false&offerid=_8jznXI8Kt6QI5hByT9ewg&cpa=1&hid=9283442&cpc=dp7ukIKAxVO_hsYfvX0K-UYS6yjgrclDQFVAjFuJFqspoqtexh0lgmZXO9IMVnH7cD1AJP7bYOIZSjnmHsSkl6-yPJcdPXlRdidxa9BbWHY5QqZStC5cZ2Fq_nSzInhtb7ftZrzhhL0OL471VkSizCPO7V-Zkh4JucfBkPjmcwQbUjgSj5cacoSo5ZRuxefDovvtGjpST5n4dcNaoTLx_5tTI7aspfM_yfncPgkZw9I%2C&publicId=niks-nm&utm_medium=sharing&stock_amount=16&ogV=163&do-waremd5=_8jznXI8Kt6QI5hByT9ewg",
       "marketplace": "yandex_market",
       "alert_threshold": 5,
       "active": true,
@@ -38,7 +20,7 @@
     },
    {
       "id": "ym_003",
-      "name": "Стулья-кресла для кухни Альтаир, в графитовом цвете, комплект 2 штуки",
+      "name": "Приставка игровая стим валуе"
       "url": "https://market.yandex.ru/card/igrovaya-pristavka-valve-steam-deck-lcd-1-tb-ssd/4824518400?do-waremd5=VmvyOIXl_5uU1O61l_hmGw&sponsored=1&cpc=w9DBCWz2kix8B7Bi2lm2VYL1afmT9VyXT4pYKrwfrEA0bZQBQEH-E41l8uyrGYVaI4DIoQOQ5NX-SGkm9ozibSY2B5UkE5fT5q-LUe212zlDfahrQ9ApjKsdUtXaqu_9F_U1X1RXU9iOVNveS53OeEn39zuzohD9YbF7rc04odgUOSeIBfAZHymIHuAwBwv5eFNr6lkd3iObJeOFQ9ayAnxwUVk_iLWszza4GV_0DSnBDGFMUVAgwhXIo09lOWeqpWLRSJyqxC7l7ROAH0zDzQ%2C%2C&ogV=-12",
       "marketplace": "yandex_market",
       "alert_threshold": 5,
@@ -47,7 +29,7 @@
     }
   ],
   "settings": {
-    "check_interval_hours": 3,
+    "check_interval_hours": 6,
     "default_alert_threshold": 5,
     "telegram_bot_token": "",
     "telegram_chat_id": "",
